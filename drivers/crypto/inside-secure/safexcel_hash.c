@@ -137,7 +137,8 @@ static void safexcel_context_control(struct safexcel_ahash_ctx *ctx,
 			}
 		}
 	} else if (req->digest == CONTEXT_CONTROL_DIGEST_HMAC) {
-		cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE(2 * req->state_sz / sizeof(u32));
+		cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE(2 * req->state_sz /
+								     sizeof(u32));
 
 		memcpy(ctx->base.ctxr->data, ctx->ipad, req->state_sz);
 		memcpy(ctx->base.ctxr->data + req->state_sz / sizeof(u32),
@@ -145,7 +146,8 @@ static void safexcel_context_control(struct safexcel_ahash_ctx *ctx,
 	}
 }
 
-static int safexcel_handle_req_result(struct safexcel_crypto_priv *priv, int ring,
+static int safexcel_handle_req_result(struct safexcel_crypto_priv *priv,
+				      int ring,
 				      struct crypto_async_request *async,
 				      bool *should_complete, int *ret)
 {
@@ -153,20 +155,25 @@ static int safexcel_handle_req_result(struct safexcel_crypto_priv *priv, int rin
 	struct ahash_request *areq = ahash_request_cast(async);
 	struct crypto_ahash *ahash = crypto_ahash_reqtfm(areq);
 	struct safexcel_ahash_req *sreq = ahash_request_ctx(areq);
+	void *read = priv->ring[ring].rdr.read;
 	u64 cache_len;
 
 	*ret = 0;
 
-	rdesc = safexcel_ring_next_rptr(priv, &priv->ring[ring].rdr);
-	if (IS_ERR(rdesc)) {
-		dev_err(priv->dev,
-			"hash: result: could not retrieve the result descriptor\n");
+	rdesc = safexcel_rdr_next_rptr(priv, &priv->ring[ring].rdr, &read);
+	if (EIP197_RD_OWN_WORD && IS_ERR(rdesc)) {
+		/* RD not written yet, try again later .. */
 		*ret = PTR_ERR(rdesc);
+		*should_complete = false;
+		return 0;
 	} else {
 		*ret = safexcel_rdesc_check_errors(priv, rdesc);
 	}
 
 	safexcel_complete(priv, ring);
+
+	/* Move the RDR read pointer after all desc have been fully processed */
+	priv->ring[ring].rdr.read = read;
 
 	if (sreq->nents) {
 		dma_unmap_sg(priv->dev, areq->src, sreq->nents, DMA_TO_DEVICE);
@@ -285,7 +292,8 @@ static int safexcel_ahash_send_req(struct crypto_async_request *async, int ring,
 			sglen = queued;
 
 		cdesc = safexcel_add_cdesc(priv, ring, !n_cdesc,
-					   !(queued - sglen), sg_dma_address(sg),
+					   !(queued - sglen),
+					   sg_dma_address(sg),
 					   sglen, len, ctx->base.ctxr_dma);
 		if (IS_ERR(cdesc)) {
 			ret = PTR_ERR(cdesc);
@@ -340,7 +348,7 @@ unmap_sg:
 	dma_unmap_sg(priv->dev, areq->src, req->nents, DMA_TO_DEVICE);
 cdesc_rollback:
 	for (i = 0; i < n_cdesc; i++)
-		safexcel_ring_rollback_wptr(priv, &priv->ring[ring].cdr);
+		safexcel_cdr_rollback_wptr(priv, &priv->ring[ring].cdr);
 unmap_cache:
 	if (req->cache_dma) {
 		dma_unmap_single(priv->dev, req->cache_dma, req->cache_sz,
@@ -360,7 +368,8 @@ static inline bool safexcel_ahash_needs_inv_get(struct ahash_request *areq)
 	int i;
 
 	processed = req->processed[0] / EIP197_COUNTER_BLOCK_SIZE;
-	processed += (0xffffffff / EIP197_COUNTER_BLOCK_SIZE) * req->processed[1];
+	processed += (0xffffffff / EIP197_COUNTER_BLOCK_SIZE) *
+		     req->processed[1];
 
 	for (i = 0; i < state_w_sz; i++)
 		if (ctx->base.ctxr->data[i] != cpu_to_le32(req->state[i]))
@@ -381,20 +390,25 @@ static int safexcel_handle_inv_result(struct safexcel_crypto_priv *priv,
 	struct ahash_request *areq = ahash_request_cast(async);
 	struct crypto_ahash *ahash = crypto_ahash_reqtfm(areq);
 	struct safexcel_ahash_ctx *ctx = crypto_ahash_ctx(ahash);
+	void *read = priv->ring[ring].rdr.read;
 	int enq_ret;
 
 	*ret = 0;
 
-	rdesc = safexcel_ring_next_rptr(priv, &priv->ring[ring].rdr);
-	if (IS_ERR(rdesc)) {
-		dev_err(priv->dev,
-			"hash: invalidate: could not retrieve the result descriptor\n");
+	rdesc = safexcel_rdr_next_rptr(priv, &priv->ring[ring].rdr, &read);
+	if (EIP197_RD_OWN_WORD && IS_ERR(rdesc)) {
+		/* RD not written yet, try again later .. */
 		*ret = PTR_ERR(rdesc);
+		*should_complete = false;
+		return 0;
 	} else {
 		*ret = safexcel_rdesc_check_errors(priv, rdesc);
 	}
 
 	safexcel_complete(priv, ring);
+
+	/* Move the RDR read pointer after all desc have been fully processed */
+	priv->ring[ring].rdr.read = read;
 
 	if (ctx->base.exit_inv) {
 		dma_pool_free(priv->context_pool, ctx->base.ctxr,
@@ -405,7 +419,6 @@ static int safexcel_handle_inv_result(struct safexcel_crypto_priv *priv,
 	}
 
 	ring = safexcel_select_ring(priv);
-	ctx->base.ring = ring;
 
 	spin_lock_bh(&priv->ring[ring].queue_lock);
 	enq_ret = crypto_enqueue_request(&priv->ring[ring].queue, async);
@@ -430,7 +443,7 @@ static int safexcel_handle_result(struct safexcel_crypto_priv *priv, int ring,
 	struct safexcel_ahash_req *req = ahash_request_ctx(areq);
 	int err;
 
-	BUG_ON(!(priv->flags & EIP197_TRC_CACHE) && req->needs_inv);
+	BUG_ON(!(priv->feat_flags & EIP197_NEED_INV) && req->needs_inv);
 
 	if (req->needs_inv) {
 		req->needs_inv = false;
@@ -484,7 +497,7 @@ static int safexcel_ahash_exit_inv(struct crypto_tfm *tfm)
 	EIP197_REQUEST_ON_STACK(req, ahash, EIP197_AHASH_REQ_SIZE);
 	struct safexcel_ahash_req *rctx = ahash_request_ctx(req);
 	struct safexcel_inv_result result = {};
-	int ring = ctx->base.ring;
+	int ring = safexcel_select_ring(priv);
 
 	memset(req, 0, sizeof(struct ahash_request));
 
@@ -560,7 +573,8 @@ static int safexcel_ahash_enqueue(struct ahash_request *areq)
 	req->needs_inv = false;
 
 	if (ctx->base.ctxr) {
-		if (priv->flags & EIP197_TRC_CACHE && !ctx->base.needs_inv &&
+		if ((priv->feat_flags & EIP197_NEED_INV) &&
+		    !ctx->base.needs_inv &&
 		    (req->processed[0] || req->processed[1]) &&
 		    req->digest == CONTEXT_CONTROL_DIGEST_PRECOMPUTED)
 			/* We're still setting needs_inv here, even though it is
@@ -575,7 +589,6 @@ static int safexcel_ahash_enqueue(struct ahash_request *areq)
 			req->needs_inv = true;
 		}
 	} else {
-		ctx->base.ring = safexcel_select_ring(priv);
 		ctx->base.ctxr = dma_pool_zalloc(priv->context_pool,
 						 EIP197_GFP_FLAGS(areq->base),
 						 &ctx->base.ctxr_dma);
@@ -583,7 +596,7 @@ static int safexcel_ahash_enqueue(struct ahash_request *areq)
 			return -ENOMEM;
 	}
 
-	ring = ctx->base.ring;
+	ring = safexcel_select_ring(priv);
 
 	spin_lock_bh(&priv->ring[ring].queue_lock);
 	ret = crypto_enqueue_request(&priv->ring[ring].queue, &areq->base);
@@ -772,10 +785,11 @@ static void safexcel_ahash_cra_exit(struct crypto_tfm *tfm)
 	if (!ctx->base.ctxr)
 		return;
 
-	if (priv->flags & EIP197_TRC_CACHE) {
+	if (priv->feat_flags & EIP197_NEED_INV) {
 		ret = safexcel_ahash_exit_inv(tfm);
 		if (ret)
-			dev_warn(priv->dev, "hash: invalidation error %d\n", ret);
+			dev_warn(priv->dev, "hash: invalidation error %d\n",
+				 ret);
 	} else {
 		dma_pool_free(priv->context_pool, ctx->base.ctxr,
 			      ctx->base.ctxr_dma);
@@ -784,7 +798,7 @@ static void safexcel_ahash_cra_exit(struct crypto_tfm *tfm)
 
 struct safexcel_alg_template safexcel_alg_sha1 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_SHA1,
 	.alg.ahash = {
 		.init = safexcel_sha1_init,
 		.update = safexcel_ahash_update,
@@ -799,7 +813,7 @@ struct safexcel_alg_template safexcel_alg_sha1 = {
 			.base = {
 				.cra_name = "sha1",
 				.cra_driver_name = "safexcel-sha1",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = SHA1_BLOCK_SIZE,
@@ -992,7 +1006,7 @@ static int safexcel_hmac_alg_setkey(struct crypto_ahash *tfm, const u8 *key,
 	if (ret)
 		return ret;
 
-	if (priv->flags & EIP197_TRC_CACHE && ctx->base.ctxr) {
+	if ((priv->feat_flags & EIP197_NEED_INV) && ctx->base.ctxr) {
 		for (i = 0; i < state_sz / sizeof(u32); i++) {
 			if (ctx->ipad[i] != le32_to_cpu(istate.state[i]) ||
 			    ctx->opad[i] != le32_to_cpu(ostate.state[i])) {
@@ -1017,7 +1031,7 @@ static int safexcel_hmac_sha1_setkey(struct crypto_ahash *tfm, const u8 *key,
 
 struct safexcel_alg_template safexcel_alg_hmac_sha1 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_SHA1,
 	.alg.ahash = {
 		.init = safexcel_hmac_sha1_init,
 		.update = safexcel_ahash_update,
@@ -1033,7 +1047,7 @@ struct safexcel_alg_template safexcel_alg_hmac_sha1 = {
 			.base = {
 				.cra_name = "hmac(sha1)",
 				.cra_driver_name = "safexcel-hmac-sha1",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = SHA1_BLOCK_SIZE,
@@ -1081,7 +1095,7 @@ static int safexcel_sha256_digest(struct ahash_request *areq)
 
 struct safexcel_alg_template safexcel_alg_sha256 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_SHA2_256,
 	.alg.ahash = {
 		.init = safexcel_sha256_init,
 		.update = safexcel_ahash_update,
@@ -1096,7 +1110,7 @@ struct safexcel_alg_template safexcel_alg_sha256 = {
 			.base = {
 				.cra_name = "sha256",
 				.cra_driver_name = "safexcel-sha256",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = SHA256_BLOCK_SIZE,
@@ -1144,7 +1158,7 @@ static int safexcel_sha224_digest(struct ahash_request *areq)
 
 struct safexcel_alg_template safexcel_alg_sha224 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_SHA2_256,
 	.alg.ahash = {
 		.init = safexcel_sha224_init,
 		.update = safexcel_ahash_update,
@@ -1159,7 +1173,7 @@ struct safexcel_alg_template safexcel_alg_sha224 = {
 			.base = {
 				.cra_name = "sha224",
 				.cra_driver_name = "safexcel-sha224",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = SHA224_BLOCK_SIZE,
@@ -1200,7 +1214,7 @@ static int safexcel_hmac_sha224_digest(struct ahash_request *areq)
 
 struct safexcel_alg_template safexcel_alg_hmac_sha224 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_SHA2_256,
 	.alg.ahash = {
 		.init = safexcel_hmac_sha224_init,
 		.update = safexcel_ahash_update,
@@ -1216,7 +1230,7 @@ struct safexcel_alg_template safexcel_alg_hmac_sha224 = {
 			.base = {
 				.cra_name = "hmac(sha224)",
 				.cra_driver_name = "safexcel-hmac-sha224",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = SHA224_BLOCK_SIZE,
@@ -1257,7 +1271,7 @@ static int safexcel_hmac_sha256_digest(struct ahash_request *areq)
 
 struct safexcel_alg_template safexcel_alg_hmac_sha256 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_SHA2_256,
 	.alg.ahash = {
 		.init = safexcel_hmac_sha256_init,
 		.update = safexcel_ahash_update,
@@ -1273,7 +1287,7 @@ struct safexcel_alg_template safexcel_alg_hmac_sha256 = {
 			.base = {
 				.cra_name = "hmac(sha256)",
 				.cra_driver_name = "safexcel-hmac-sha256",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = SHA256_BLOCK_SIZE,
@@ -1329,7 +1343,7 @@ static int safexcel_sha512_digest(struct ahash_request *areq)
 
 struct safexcel_alg_template safexcel_alg_sha512 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_SHA2_512,
 	.alg.ahash = {
 		.init = safexcel_sha512_init,
 		.update = safexcel_ahash_update,
@@ -1344,7 +1358,7 @@ struct safexcel_alg_template safexcel_alg_sha512 = {
 			.base = {
 				.cra_name = "sha512",
 				.cra_driver_name = "safexcel-sha512",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = SHA512_BLOCK_SIZE,
@@ -1400,7 +1414,7 @@ static int safexcel_sha384_digest(struct ahash_request *areq)
 
 struct safexcel_alg_template safexcel_alg_sha384 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_SHA2_512,
 	.alg.ahash = {
 		.init = safexcel_sha384_init,
 		.update = safexcel_ahash_update,
@@ -1415,7 +1429,7 @@ struct safexcel_alg_template safexcel_alg_sha384 = {
 			.base = {
 				.cra_name = "sha384",
 				.cra_driver_name = "safexcel-sha384",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = SHA384_BLOCK_SIZE,
@@ -1456,7 +1470,7 @@ static int safexcel_hmac_sha512_digest(struct ahash_request *areq)
 
 struct safexcel_alg_template safexcel_alg_hmac_sha512 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_SHA2_512,
 	.alg.ahash = {
 		.init = safexcel_hmac_sha512_init,
 		.update = safexcel_ahash_update,
@@ -1472,7 +1486,7 @@ struct safexcel_alg_template safexcel_alg_hmac_sha512 = {
 			.base = {
 				.cra_name = "hmac(sha512)",
 				.cra_driver_name = "safexcel-hmac-sha512",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = SHA512_BLOCK_SIZE,
@@ -1513,7 +1527,7 @@ static int safexcel_hmac_sha384_digest(struct ahash_request *areq)
 
 struct safexcel_alg_template safexcel_alg_hmac_sha384 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_SHA2_512,
 	.alg.ahash = {
 		.init = safexcel_hmac_sha384_init,
 		.update = safexcel_ahash_update,
@@ -1529,7 +1543,7 @@ struct safexcel_alg_template safexcel_alg_hmac_sha384 = {
 			.base = {
 				.cra_name = "hmac(sha384)",
 				.cra_driver_name = "safexcel-hmac-sha384",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = SHA384_BLOCK_SIZE,
@@ -1573,7 +1587,7 @@ static int safexcel_md5_digest(struct ahash_request *areq)
 
 struct safexcel_alg_template safexcel_alg_md5 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_MD5,
 	.alg.ahash = {
 		.init = safexcel_md5_init,
 		.update = safexcel_ahash_update,
@@ -1588,7 +1602,7 @@ struct safexcel_alg_template safexcel_alg_md5 = {
 			.base = {
 				.cra_name = "md5",
 				.cra_driver_name = "safexcel-md5",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = MD5_HMAC_BLOCK_SIZE,
@@ -1629,7 +1643,7 @@ static int safexcel_hmac_md5_digest(struct ahash_request *areq)
 
 struct safexcel_alg_template safexcel_alg_hmac_md5 = {
 	.type = SAFEXCEL_ALG_TYPE_AHASH,
-	.engines = EIP97IES | EIP197B | EIP197D,
+	.algo_mask = ALGO_MD5,
 	.alg.ahash = {
 		.init = safexcel_hmac_md5_init,
 		.update = safexcel_ahash_update,
@@ -1645,7 +1659,7 @@ struct safexcel_alg_template safexcel_alg_hmac_md5 = {
 			.base = {
 				.cra_name = "hmac(md5)",
 				.cra_driver_name = "safexcel-hmac-md5",
-				.cra_priority = 300,
+				.cra_priority = 500,
 				.cra_flags = CRYPTO_ALG_ASYNC |
 					     CRYPTO_ALG_KERN_DRIVER_ONLY,
 				.cra_blocksize = MD5_HMAC_BLOCK_SIZE,
