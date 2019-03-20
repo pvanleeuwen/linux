@@ -43,7 +43,7 @@ int safexcel_init_ring_descriptors(struct safexcel_crypto_priv *priv,
 	return 0;
 }
 
-inline int safexcel_select_ring(struct safexcel_crypto_priv *priv)
+int safexcel_select_ring(struct safexcel_crypto_priv *priv)
 {
 	/* TBD: do load balancing based on ring fill level ... */
 	return (atomic_inc_return(&priv->ring_used) % priv->config.rings);
@@ -87,8 +87,8 @@ static void *safexcel_rdr_next_wptr(struct safexcel_crypto_priv *priv,
 	return ptr;
 }
 
-inline void *safexcel_cdr_next_rptr(struct safexcel_crypto_priv *priv,
-				    struct safexcel_desc_ring *ring)
+void *safexcel_cdr_next_rptr(struct safexcel_crypto_priv *priv,
+			     struct safexcel_desc_ring *ring)
 {
 	void *ptr = ring->read;
 
@@ -101,9 +101,9 @@ inline void *safexcel_cdr_next_rptr(struct safexcel_crypto_priv *priv,
 	return ptr;
 }
 
-inline void *safexcel_rdr_next_rptr(struct safexcel_crypto_priv *priv,
-				    struct safexcel_desc_ring *ring,
-				    void **read)
+void *safexcel_rdr_next_rptr(struct safexcel_crypto_priv *priv,
+			     struct safexcel_desc_ring *ring,
+			     void **read)
 {
 	void *ptr = *read;
 
@@ -138,8 +138,8 @@ inline void *safexcel_rdr_next_rptr(struct safexcel_crypto_priv *priv,
 }
 
 /* Verify if next full packet is available already, using ownership words */
-inline bool safexcel_rdr_scan_next(struct safexcel_crypto_priv *priv,
-				   struct safexcel_desc_ring *ring)
+bool safexcel_rdr_scan_next(struct safexcel_crypto_priv *priv,
+			    struct safexcel_desc_ring *ring)
 {
 	struct safexcel_result_desc *rdesc;
 	u32 *own;
@@ -170,17 +170,17 @@ inline void *safexcel_ring_curr_rptr(struct safexcel_crypto_priv *priv,
 	return rdr->read;
 }
 
-inline int safexcel_ring_first_rdr_index(struct safexcel_crypto_priv *priv,
-					 int ring)
+int safexcel_ring_first_rdr_index(struct safexcel_crypto_priv *priv,
+				  int ring)
 {
 	struct safexcel_desc_ring *rdr = &priv->ring[ring].rdr;
 
 	return (rdr->read - rdr->base) / priv->config.rd_offset;
 }
 
-inline int safexcel_ring_rdr_rdesc_index(struct safexcel_crypto_priv *priv,
-					 int ring,
-					 struct safexcel_result_desc *rdesc)
+int safexcel_ring_rdr_rdesc_index(struct safexcel_crypto_priv *priv,
+				  int ring,
+				  struct safexcel_result_desc *rdesc)
 {
 	struct safexcel_desc_ring *rdr = &priv->ring[ring].rdr;
 

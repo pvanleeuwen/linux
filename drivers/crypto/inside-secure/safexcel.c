@@ -361,6 +361,10 @@ static bool poll_fw_ready(struct safexcel_crypto_priv *priv,
 		}
 	}
 	/* FW initialization done, extract FW info */
+	if (oce)
+		base = EIP197_PE_OCE_SCRATCH_RAM(0);
+	else
+		base = EIP197_PE_ICE_SCRATCH_RAM(0);
 	*fwver = readl(EIP197_PE(priv) + base + fwverofs);
 	if (*fwver >= 0x300) {
 		/* For FW version 3.0 and above only */
@@ -648,7 +652,7 @@ static int eip197_load_firmwares(struct safexcel_crypto_priv *priv)
 	const struct firmware *fw[FW_NB];
 	char fw_path[31], *dir = NULL;
 	int i, j, ret = 0, pe, numfw;
-	int ipuesz, ifppsz, opuesz, ofppsz;
+	int ipuesz, ifppsz, opuesz = 0, ofppsz = 0;
 
 	if (!(priv->feat_flags & EIP197_ICE)) {
 		/* No firmware is required */

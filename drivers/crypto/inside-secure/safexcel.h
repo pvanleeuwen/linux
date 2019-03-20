@@ -896,16 +896,16 @@ int safexcel_invalidate_cache(struct crypto_async_request *async,
 int safexcel_init_ring_descriptors(struct safexcel_crypto_priv *priv,
 				   struct safexcel_desc_ring *cdr,
 				   struct safexcel_desc_ring *rdr);
-inline int safexcel_select_ring(struct safexcel_crypto_priv *priv);
-inline void *safexcel_cdr_next_rptr(struct safexcel_crypto_priv *priv,
-				    struct safexcel_desc_ring *ring);
-inline void *safexcel_rdr_next_rptr(struct safexcel_crypto_priv *priv,
-				    struct safexcel_desc_ring *ring,
-				    void **read);
-inline bool safexcel_rdr_scan_next(struct safexcel_crypto_priv *priv,
-				   struct safexcel_desc_ring *ring);
-inline void *safexcel_ring_first_rptr(struct safexcel_crypto_priv *priv,
-				      int  ring);
+int safexcel_select_ring(struct safexcel_crypto_priv *priv);
+void *safexcel_cdr_next_rptr(struct safexcel_crypto_priv *priv,
+			     struct safexcel_desc_ring *ring);
+void *safexcel_rdr_next_rptr(struct safexcel_crypto_priv *priv,
+			     struct safexcel_desc_ring *ring,
+			     void **read);
+bool safexcel_rdr_scan_next(struct safexcel_crypto_priv *priv,
+			    struct safexcel_desc_ring *ring);
+void *safexcel_ring_first_rptr(struct safexcel_crypto_priv *priv,
+			       int  ring);
 void safexcel_cdr_rollback_wptr(struct safexcel_crypto_priv *priv,
 				struct safexcel_desc_ring *ring);
 void safexcel_rdr_rollback_wptr(struct safexcel_crypto_priv *priv,
@@ -920,11 +920,11 @@ struct safexcel_result_desc *safexcel_add_rdesc(struct safexcel_crypto_priv *pri
 						 int ring_id,
 						bool first, bool last,
 						dma_addr_t data, u32 len);
-inline int safexcel_ring_first_rdr_index(struct safexcel_crypto_priv *priv,
-					 int ring);
-inline int safexcel_ring_rdr_rdesc_index(struct safexcel_crypto_priv *priv,
-					 int ring,
-					 struct safexcel_result_desc *rdesc);
+int safexcel_ring_first_rdr_index(struct safexcel_crypto_priv *priv,
+				  int ring);
+int safexcel_ring_rdr_rdesc_index(struct safexcel_crypto_priv *priv,
+				  int ring,
+				  struct safexcel_result_desc *rdesc);
 void safexcel_rdr_req_set(struct safexcel_crypto_priv *priv,
 			  int ring,
 			  struct safexcel_result_desc *rdesc,
