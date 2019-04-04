@@ -27,15 +27,18 @@
 
 #include "safexcel.h"
 
-static u32 max_rings = 255; // Use HW max by default
+static u32 nofw; // disable FW load
+module_param(nofw, uint, 0644);
+MODULE_PARM_DESC(nofw, "Set to 1 to force skipping of firmware download");
+static u32 max_rings= 255;
 module_param(max_rings, uint, 0644);
-MODULE_PARM_DESC(max_rings, "Maximum number of rings to use, default 1. Use more rings to spread the load over multiple CPUs.");
+MODULE_PARM_DESC(max_rings, "Maximum number of rings to use, default=all. Use more rings to spread the load over multiple CPUs");
 static u32 ring_entries; // default=0=autoconfig
 module_param(ring_entries, uint, 0644);
-MODULE_PARM_DESC(ring_entries, "Number of entries per ring. 0(default)=auto-configure.");
+MODULE_PARM_DESC(ring_entries, "Number of entries per ring. 0(default)=auto-configure");
 static u32 queue_entries; // default=0=autoconfig
 module_param(queue_entries, uint, 0644);
-MODULE_PARM_DESC(queue_entries, "Number of entries per workqueue. 0(default)=auto-configure.");
+MODULE_PARM_DESC(queue_entries, "Number of entries per workqueue. 0(default)=auto-configure");
 /*
  * 2log of AXI burst size, platform dependent, 1-4 for AXI3, 1-8 for AXI4
  * Some platforms may require a lower value due to resource restrictions
@@ -45,7 +48,7 @@ MODULE_PARM_DESC(queue_entries, "Number of entries per workqueue. 0(default)=aut
  */
 static u32 burst_size = 4;
 module_param(burst_size, uint, 0644);
-MODULE_PARM_DESC(burst_size, "2log of AXI burst size to use (1-8, 4 is default).");
+MODULE_PARM_DESC(burst_size, "2log of AXI burst size to use (1-8, 4 is default)");
 
 static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 {
@@ -134,7 +137,7 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 	dsize = addrhi; // probed data RAM size in bytes
 
 	dev_info(priv->dev,
-		"Probed %d bytes of transform record cache data RAM\n", dsize);
+		"Probed %d bytes of transform record cache data RAM", dsize);
 
 	/*
 	 * Now probe the administration RAM size pretty much the same way
@@ -175,7 +178,7 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 	asize = addrhi>>4; // probed admin RAM size in admin words
 
 	dev_info(priv->dev,
-		"Probed %d words of transform record cache admin RAM\n", asize);
+		"Probed %d words of transform record cache admin RAM", asize);
 
 	/*
 	 * Determine optimal configuration from RAM sizes
@@ -200,7 +203,7 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 	cs_ht_wc = 16<<cs_ht_sz; // dwords, not admin words
 
 	dev_info(priv->dev,
-		"Initializing cache for %d records with %d hash table entries (%d/record)\n",
+		"Initializing cache for %d records with %d hash table entries (%d/record)",
 		cs_rc_max, cs_ht_wc+cs_ht_wc, ((cs_ht_wc+cs_ht_wc)/cs_rc_max));
 
 	/* Clear all records in administration RAM */
@@ -354,8 +357,8 @@ static bool poll_fw_ready(struct safexcel_crypto_priv *priv,
 				cpu_relax();
 			}
 			if (!pollcnt) {
-				dev_err(priv->dev, "IPUE FW for PE %d failed to start.\n",
-				pe);
+				dev_err(priv->dev, "FW(%d,%d) for PE %d failed to start",
+					oce, fpp, pe);
 				return false;
 			}
 		}
@@ -388,10 +391,7 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 	u32 iphwmmver, ifhwmmver, ophwmmver, ofhwmmver;
 
 	for (pe = 0; pe < priv->config.pes; pe++) {
-		/* Disable all program memory access */
-		writel(0, EIP197_PE(priv) + EIP197_PE_ICE_RAM_CTRL(pe));
-
-		if (priv->feat_flags & EIP197_OCE) {
+		if ((numfw == 4) && (priv->feat_flags & EIP197_OCE)) {
 			/* Start OFPP microengines */
 			val = ((ofppsz - 1) & 0x7ff0) << 16;
 			if (ofppsz)
@@ -425,14 +425,14 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 		return true;
 
 	/* Wait until all the firmwares have properly started up */
-	if (priv->feat_flags & EIP197_OCE) {
+	if ((numfw == 4) && (priv->feat_flags & EIP197_OCE)) {
 		if (!poll_fw_ready(priv, ofppsz, 1, 1, &offwver,
 				   &ofhwrver, &ofhwmmver))
 			return false;
 		if (!poll_fw_ready(priv, opuesz, 1, 0, &opfwver,
 				   &ophwrver, &ophwmmver))
 			return false;
-		dev_info(priv->dev, "OPUE FW version %d.%d.%d(%d) for HW %d.%d.%d(%d, min %d.%d.%d max %d.%d.%d)\n",
+		dev_info(priv->dev, "OPUE FW version %d.%d.%d(%d) for HW %d.%d.%d(%d, min %d.%d.%d max %d.%d.%d)",
 			 ((opfwver>>8)&0xf), ((opfwver>>4)&0xf),
 			 (opfwver&0xf), ((opfwver>>12)&0xf),
 			 ((ophwrver>>8)&0xf), ((ophwrver>>4)&0xf),
@@ -441,7 +441,7 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 			 (ophwmmver&0xf),
 			 ((ophwmmver>>24)&0xf), ((ophwmmver>>20)&0xf),
 			 ((ophwmmver>>16)&0xf));
-		dev_info(priv->dev, "OFPP FW version %d.%d.%d(%d) for HW %d.%d.%d(%d, min %d.%d.%d max %d.%d.%d)\n",
+		dev_info(priv->dev, "OFPP FW version %d.%d.%d(%d) for HW %d.%d.%d(%d, min %d.%d.%d max %d.%d.%d)",
 			 ((offwver>>8)&0xf), ((offwver>>4)&0xf),
 			 (offwver&0xf), ((offwver>>12)&0xf),
 			 ((ofhwrver>>8)&0xf), ((ofhwrver>>4)&0xf),
@@ -453,7 +453,7 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 		/* OCE FW set consistency check */
 		if ((opfwver != offwver) || (ophwrver != ofhwrver) ||
 		    (ophwmmver != ofhwmmver)) {
-			dev_info(priv->dev, "OCE firmware versions do not match.\n");
+			dev_info(priv->dev, "OCE firmware versions do not match");
 			return false;
 		}
 	}
@@ -464,7 +464,7 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 	if (!poll_fw_ready(priv, ipuesz, 0, 0, &ipfwver,
 			   &iphwrver, &iphwmmver))
 		return false;
-	dev_info(priv->dev, "IPUE FW version %d.%d.%d(%d) for HW %d.%d.%d(%d, min %d.%d.%d max %d.%d.%d)\n",
+	dev_info(priv->dev, "IPUE FW version %d.%d.%d(%d) for HW %d.%d.%d(%d, min %d.%d.%d max %d.%d.%d)",
 		 ((ipfwver>>8)&0xf), ((ipfwver>>4)&0xf),
 		 (ipfwver&0xf), ((ipfwver>>12)&0xf),
 		 ((iphwrver>>8)&0xf), ((iphwrver>>4)&0xf),
@@ -473,7 +473,7 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 		 (iphwmmver&0xf),
 		 ((iphwmmver>>24)&0xf), ((iphwmmver>>20)&0xf),
 		 ((iphwmmver>>16)&0xf));
-	dev_info(priv->dev, "IFPP FW version %d.%d.%d(%d) for HW %d.%d.%d(%d, min %d.%d.%d max %d.%d.%d)\n",
+	dev_info(priv->dev, "IFPP FW version %d.%d.%d(%d) for HW %d.%d.%d(%d, min %d.%d.%d max %d.%d.%d)",
 		 ((iffwver>>8)&0xf), ((iffwver>>4)&0xf),
 		 (iffwver&0xf), ((iffwver>>12)&0xf),
 		 ((ifhwrver>>8)&0xf), ((ifhwrver>>4)&0xf),
@@ -485,13 +485,14 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 	/* ICE FW set consistency check */
 	if ((ipfwver != iffwver) || (iphwrver != ifhwrver) ||
 	    (iphwmmver != ifhwmmver)) {
-		dev_info(priv->dev, "ICE firmware versions do not match.\n");
+		dev_info(priv->dev, "ICE firmware versions do not match");
 		return false;
 	}
 	/* ICE vs OCE FW consistency check if applicable*/
 	if (((ipfwver != opfwver) || (iphwrver != ophwrver) ||
-	     (iphwmmver != ophwmmver)) && (priv->feat_flags & EIP197_OCE)) {
-		dev_info(priv->dev, "ICE vs OCE firmware version mismatch.\n");
+	     (iphwmmver != ophwmmver)) && 
+	    (priv->feat_flags & EIP197_OCE) && (numfw == 4)) {
+		dev_info(priv->dev, "ICE vs OCE firmware version mismatch");
 		return false;
 	}
 	priv->fwver = ipfwver & 0xfff;
@@ -504,7 +505,7 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 		    ((priv->hwver < (iphwmmver&0xfff)) ||
 		    /* max version check */
 		     (priv->hwver > ((iphwmmver>>16)&0xfff)))) {
-			dev_info(priv->dev, "Firmware set is not intended for this hardware.\n");
+			dev_info(priv->dev, "Firmware set is not intended for this hardware");
 			return false;
 		}
 		/* Parse HW info block for HW3.0+ */
@@ -518,19 +519,19 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 					EIP197_FW_IPBSIZE);
 			if ((topver & 0xffff) == EIP197_VERSION_LE) {
 				if (((topver>>16)&0xfff) != priv->hwver) {
-					dev_info(priv->dev, "Top version %x mismatches HW version %x.\n",
+					dev_info(priv->dev, "Top version %x mismatches HW version %x",
 						 ((topver>>16) & 0xfff),
 						 priv->hwver);
 				} else if (((topver>>28) & 0xf) !=
 					   priv->hwctg) {
 					priv->hwctg = (topver>>28) & 0xf;
-					dev_info(priv->dev, "(HW customization identifier updated to %d)\n",
+					dev_info(priv->dev, "(HW customization identifier updated to %d)",
 						 priv->hwctg);
 				}
 				ipbsize &= 0xffffff;
 				if ((ipbsize < priv->hwipbsize) ||
 				    (ipbsize > (priv->hwipbsize<<1))) {
-					dev_info(priv->dev, "Coarse (%d) vs fine (%d) input buffer size difference too large.\n",
+					dev_info(priv->dev, "Coarse (%d) vs fine (%d) input buffer size difference too large",
 						 priv->hwipbsize, ipbsize);
 					return false;
 				}
@@ -544,11 +545,11 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 				 * ADAPT_CTRL reg was correctly written
 				 * previously and also not reset since.
 				 */
-				dev_info(priv->dev, "Possible reinit detected, skipping IPBM config.\n");
+				dev_info(priv->dev, "Possible reinit detected, skipping IPBM config");
 				return true;
 			} else {
 				/* Anything else is just some error */
-				dev_info(priv->dev, "Invalid HW info block found (read version=%x).\n",
+				dev_info(priv->dev, "Invalid HW info block found (read version=%x)",
 					 (topver & 0xffff));
 				return false;
 			}
@@ -561,7 +562,7 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 	else
 		ipbsize = (priv->hwipbsize * 3) >> 2;
 
-	dev_info(priv->dev, "Packet input buffer size is %d bytes, max parsing depth set to %d.\n",
+	dev_info(priv->dev, "Packet input buffer size is %d bytes, max parsing depth set to %d",
 		 priv->hwipbsize, ipbsize);
 
 	/* Program correct parsing depth threshold into the HW */
@@ -671,7 +672,12 @@ static int eip197_load_firmwares(struct safexcel_crypto_priv *priv)
 		numfw = 4;
 	else
 		numfw = 2;
-	for (i = 0; i < numfw; i++) {
+
+	i = 0;		
+	if (nofw)
+		goto release_fw;
+		
+	for (; i < numfw; i++) {
 		snprintf(fw_path, 31, "inside-secure/%s/%s", dir, fw_name[i]);
 		ret = firmware_request_nowarn(&fw[i], fw_path, priv->dev);
 		if (ret) {
@@ -704,14 +710,20 @@ download_fw:
 	/* Write IPUE firmware to all PE's in parallel */
 	ipuesz = eip197_write_firmware(priv, fw[FW_IPUE]);
 
-	dev_info(priv->dev, "IPUE FW image is %d words, IFPP FW image is %d words.\n",
+	/* Disable access to all ICE program memories */
+	for (pe = 0; pe < priv->config.pes; pe++) {
+		writel(0,
+		       EIP197_PE(priv) + EIP197_PE_ICE_RAM_CTRL(pe));
+	}
+
+	dev_info(priv->dev, "IPUE FW image is %d words, IFPP FW image is %d words",
 		 ipuesz, ifppsz);
 
 
 	if (numfw == 4) {
 		for (pe = 0; pe < priv->config.pes; pe++) {
 			/* Enable access to all OFPP program memories */
-			writel(EIP197_PE_ICE_RAM_CTRL_PUE_PROG_EN,
+			writel(EIP197_PE_ICE_RAM_CTRL_FPP_PROG_EN,
 			       EIP197_PE(priv) + EIP197_PE_OCE_RAM_CTRL(pe));
 		}
 
@@ -727,30 +739,39 @@ download_fw:
 		/* Write OPUE firmware to all PE's in parallel */
 		opuesz = eip197_write_firmware(priv, fw[FW_OPUE]);
 
-		dev_info(priv->dev, "OPUE FW image is %d words, OFPP FW image is %d words.\n",
+		/* Disable access to all OCE program memories */
+		for (pe = 0; pe < priv->config.pes; pe++) {
+			writel(0,
+			       EIP197_PE(priv) + EIP197_PE_OCE_RAM_CTRL(pe));
+		}
+
+		dev_info(priv->dev, "OPUE FW image is %d words, OFPP FW image is %d words",
 			 opuesz, ofppsz);
 	}
 
 	if (eip197_start_firmware(priv, numfw, ipuesz, ifppsz,
 				  opuesz, ofppsz)) {
-		dev_info(priv->dev, "EIP197 firmware loaded successfully.\n");
+		dev_info(priv->dev, "EIP197 firmware loaded successfully");
 		return 0;
 	}
-	// fallback to BCLA if FW start failed
-	i = 0;
-
+	
 release_fw:
 	/* Note that this functionality is formally for debugging only ... */
 	if (priv->feat_flags & EIP197_OCE) {
 		/* bypass the OCE for all pipes */
 		for (pe = 0; pe < priv->config.pes; pe++)
 			writel(0x2, EIP197_PE(priv) + EIP197_PE_DEBUG(pe));
+		/* so effectively, we don't have an OCE anymore now */
+		priv->feat_flags = priv->feat_flags & ~EIP197_OCE;
 	}
 
-	if (i >= 2) {
+	if ((numfw == 4) && (i >= 2)) {
 		/* IPUE & IFPP firmwares found, try to run with only those */
-		dev_info(priv->dev, "EIP197 OCE fw not present, falling back to non-OCE mode\n");
+		dev_info(priv->dev, "EIP197 OCE fw not present, falling back to non-OCE mode");
+		for (j = 2; j < i; j++)
+			release_firmware(fw[j]);
 		numfw = 2;
+		i = 2;
 		goto download_fw;
 	}
 
@@ -762,7 +783,7 @@ release_fw:
 	 * Note that this is not a formally supported mode for the EIP197,
 	 * so your mileage may vary
 	 */
-	dev_info(priv->dev, "EIP197 firmware set not (fully) present or init failed, falling back to EIP97 BCLA mode\n");
+	dev_info(priv->dev, "EIP197 firmware set not (fully) present or init failed, falling back to EIP97 BCLA mode");
 
 	eip197_init_firmware(priv, 2);
 
@@ -780,7 +801,7 @@ release_fw:
 		writel(ipue_minifw[i],
 		       priv->base + EIP197_CLASSIFICATION_RAMS + (i<<2));
 
-	eip197_start_firmware(priv, numfw, 0, 0, 0, 0);
+	eip197_start_firmware(priv, 2, 0, 0, 0, 0);
 	return 0;
 }
 
@@ -801,7 +822,7 @@ static int safexcel_hw_setup_cdesc_rings(struct safexcel_crypto_priv *priv)
 		/* for the EIP97, just fetch all that fits minus 1 */
 		cd_fetch_cnt = ((1 << priv->hwcfsize) / cd_size_rnd) - 1;
 	}
-	dev_info(priv->dev, "CDR init: size %d, offset %d, ring entries %d, queue entries %d, fetchcount %d\n",
+	dev_info(priv->dev, "CDR init: size %d, offset %d, ring entries %d, queue entries %d, fetchcount %d",
 		 priv->config.cd_size, (priv->config.cd_offset >> 2),
 		 priv->config.ring_entries, priv->config.queue_entries,
 		 cd_fetch_cnt);
@@ -853,7 +874,7 @@ static int safexcel_hw_setup_rdesc_rings(struct safexcel_crypto_priv *priv)
 		/* for the EIP97, just fetch all that fits minus 1 */
 		rd_fetch_cnt = ((1 << priv->hwrfsize) / rd_size_rnd) - 1;
 	}
-	dev_info(priv->dev, "RDR init: size %d, offset %d, ring entries %d, fetchcount %d\n",
+	dev_info(priv->dev, "RDR init: size %d, offset %d, ring entries %d, fetchcount %d",
 		 priv->config.rd_size, (priv->config.rd_offset >> 2),
 		 priv->config.ring_entries, rd_fetch_cnt);
 
@@ -946,7 +967,7 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 	/* And 256 beats max (AXI4 maximum) */
 	burst_size = min_t(u32, 8, burst_size);
 
-	dev_info(priv->dev, "EIP(1)97 HW init: burst size %d beats, using %d pipe(s) and %d ring(s)\n",
+	dev_info(priv->dev, "EIP(1)97 HW init: burst size %d beats, using %d pipe(s) and %d ring(s)",
 			(1<<burst_size), priv->config.pes, priv->config.rings);
 
 	val = readl(EIP197_HIA_AIC(priv) + EIP197_HIA_MST_CTRL);
@@ -978,7 +999,7 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 		val |= EIP197_HIA_MST_CTRL_XFR_ALIGN(__fls(cache_line_size()));
 		ctxalign = max_t(int, (__fls(cache_line_size()) - 5), 0);
 		ctxalign = min_t(int, ctxalign, 3);
-		dev_info(priv->dev, "EIP(1)97 HW init: align transfers to %d bytes, ctxt writes to %d bytes\n",
+		dev_info(priv->dev, "EIP(1)97 HW init: align transfers to %d bytes, ctxt writes to %d bytes",
 				cache_line_size(), (32<<ctxalign));
 	} else {
 		ctxalign = 0;
@@ -1168,10 +1189,12 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 					EIP197_PE_EIP96_OUT_BUF_CTRL(pe));
 		}
 
-		if (priv->pever >= 0x420) { // new in this HW version!
+		if (priv->pever >= 0x410) { // new in this HW version!
 			/* disable oversize check to allow for pad stripping */
 			writel(3, EIP197_PE(priv) +
 				  EIP197_PE_EIP96_TOKEN_CTRL2(pe));
+		}		  
+		if (priv->pever >= 0x420) { // new in this HW version!
 			/* just enable all supported algorithms, part deux */
 			writel(GENMASK(31, 0),
 			       EIP197_PE(priv) +
@@ -1226,7 +1249,7 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 			 * if we time-out, just print some warning about that,
 			 * don't hard-fail
 			 */
-			dev_info(priv->dev, "WARNING: DRBG initialization failed due to time-out.\n");
+			dev_info(priv->dev, "WARNING: DRBG initialization failed due to time-out");
 		}
 
 		/*
@@ -1457,7 +1480,7 @@ inline int safexcel_rdesc_check_errors(struct safexcel_crypto_priv *priv,
 	if (result_data->error_code & 0x407f) {
 		/* Fatal error (bits 0-7, 14) */
 		dev_err(priv->dev,
-			"cipher: result: result descriptor error (%x)\n",
+			"cipher: result: result descriptor error (%x)",
 			result_data->error_code);
 		return -EIO;
 	} else if (result_data->error_code == BIT(9)) {
@@ -1666,7 +1689,7 @@ no_thresh_irq:
 		 * reinitialized. This should not happen under
 		 * normal circumstances.
 		 */
-		dev_err(priv->dev, "RDR: fatal error.");
+		dev_err(priv->dev, "RDR: fatal error");
 	}
 }
 
@@ -1707,7 +1730,7 @@ static int safexcel_request_plf_ring_irq(struct platform_device *pdev,
 	int irq = platform_get_irq_byname(pdev, name);
 
 	if (irq < 0) {
-		dev_err(&pdev->dev, "unable to get IRQ '%s'\n", name);
+		dev_err(&pdev->dev, "unable to get IRQ '%s'", name);
 		return irq;
 	}
 
@@ -1715,7 +1738,7 @@ static int safexcel_request_plf_ring_irq(struct platform_device *pdev,
 					threaded_handler, IRQF_ONESHOT,
 					dev_name(&pdev->dev), ring_irq_priv);
 	if (ret) {
-		dev_err(&pdev->dev, "unable to request IRQ %d\n", irq);
+		dev_err(&pdev->dev, "unable to request IRQ %d", irq);
 		return ret;
 	}
 
@@ -1730,7 +1753,7 @@ static int safexcel_request_pci_ring_irq(struct pci_dev *pdev, int irqid,
 	int ret, irq = pci_irq_vector(pdev, irqid);
 
 	if (irq < 0) {
-		dev_err(&pdev->dev, "unable to get device MSI IRQ '%d'\n",
+		dev_err(&pdev->dev, "unable to get device MSI IRQ '%d'",
 			irqid);
 		return irq;
 	}
@@ -1739,7 +1762,7 @@ static int safexcel_request_pci_ring_irq(struct pci_dev *pdev, int irqid,
 					threaded_handler, IRQF_ONESHOT,
 					dev_name(&pdev->dev), ring_irq_priv);
 	if (ret) {
-		dev_err(&pdev->dev, "unable to request IRQ %d\n", irq);
+		dev_err(&pdev->dev, "unable to request IRQ %d", irq);
 		return ret;
 	}
 
@@ -1845,7 +1868,7 @@ static void safexcel_configure(struct safexcel_crypto_priv *priv)
 	priv->config.pes = priv->hwnumpes;
 
 	if (max_rings < 0) {
-		dev_err(priv->dev, "Param max_rings must be >1! Assuming minimum of 1.\n");
+		dev_err(priv->dev, "Param max_rings must be >1! Assuming minimum of 1");
 		max_rings = 1;
 	}
 
@@ -1987,7 +2010,7 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 
 	/* Determine engine type & endianness and configure byte swap */
 
-	dev_info(priv->dev, "Probing for EIP97/EIP197 at base address %p\n",
+	dev_info(priv->dev, "Probing for EIP97/EIP197 at base address %p",
 		 priv->base);
 
 	/*
@@ -2004,13 +2027,13 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 	peid = 97;
 	if ((version & 0xffff) == EIP197_HIA_VERSION_LE) {
 		priv->hiaver = (version>>16)&0xfff;
-		dev_info(priv->dev, "Detected EIP97 HIA, endianness is OK\n");
+		dev_info(priv->dev, "Detected EIP97 HIA, endianness is OK");
 	} else if (((version >> 16) & 0xffff) == EIP197_HIA_VERSION_BE) {
 		/* read back byte-swapped, so complement byte swap bits */
 		mask = EIP197_MST_CTRL_BYTE_SWAP_BITS;
 		priv->hiaver = ((version&0xf0)<<4)|((version>>4)&0xf0)|
 			       ((version>>12)&0xf);
-		dev_info(priv->dev, "Detected EIP97 HIA, endian swapped\n");
+		dev_info(priv->dev, "Detected EIP97 HIA, endian swapped");
 	} else {
 		/* So it wasn't an EIP97 ... maybe it's an EIP197? */
 		version = readl(priv->base + EIP197_HIA_AIC_BASE +
@@ -2019,7 +2042,7 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 			priv->hiaver = (version>>16)&0xfff;
 			priv->feat_flags = HW_IS_EIP197;
 			peid = 197;
-			dev_info(priv->dev, "Detected EIP197 HIA, endianness is OK\n");
+			dev_info(priv->dev, "Detected EIP197 HIA, endianness is OK");
 		} else if (((version >> 16) & 0xffff) ==
 			   EIP197_HIA_VERSION_BE) {
 			/* read back byte-swapped, so complement swap bits */
@@ -2028,9 +2051,9 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 				       ((version>>12)&0xf);
 			priv->feat_flags = HW_IS_EIP197;
 			peid = 197;
-			dev_info(priv->dev, "Detected EIP197 HIA, endian swapped\n");
+			dev_info(priv->dev, "Detected EIP197 HIA, endian swapped");
 		} else {
-			dev_err(priv->dev, "Both EIP97 and EIP197 HIA not detected, probing failed\n");
+			dev_err(priv->dev, "Both EIP97 and EIP197 HIA not detected, probing failed");
 			return -ENODEV;
 		}
 	}
@@ -2063,7 +2086,7 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 		 * We did not find the device that matched our initial probing
 		 * (or our initial probing failed) Report appropriate error.
 		 */
-		dev_err(priv->dev, "Probing for EIP97/EIP197 failed - no such device (read %08x)\n",
+		dev_err(priv->dev, "Probing for EIP97/EIP197 failed - no such device (read %08x)",
 			version);
 		return -ENODEV;
 	}
@@ -2072,7 +2095,7 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 
 	version = readl(EIP197_PE(priv) + EIP197_PE_EIP96_VERSION(0));
 	if ((version & 0xffff) != EIP96_VERSION_LE) {
-		dev_err(priv->dev, "Probing for EIP96 subsystem failed - no such device\n");
+		dev_err(priv->dev, "Probing for EIP96 subsystem failed - no such device");
 		return -ENODEV;
 	}
 	priv->pever = (version>>16)&0xfff;
@@ -2081,7 +2104,7 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 	if (priv->feat_flags & HW_IS_EIP197) {
 		version = readl(priv->base + EIP197_CS_VERSION);
 		if ((version & 0xffff) != EIP207_VERSION_LE) {
-			dev_err(priv->dev, "Probing for EIP207 subsystem failed\n");
+			dev_err(priv->dev, "Probing for EIP207 subsystem failed");
 			return -ENODEV;
 		}
 		priv->csver = (version>>16)&0xfff;
@@ -2140,18 +2163,18 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 	priv->hwnumraic = val;
 
 	/* Print some info to the system log */
-	dev_info(priv->dev, "Successfully detected Inside Secure EIP%d packetengine HW%d.%d.%d(%d)\n",
+	dev_info(priv->dev, "Successfully detected Inside Secure EIP%d packetengine HW%d.%d.%d(%d)",
 		peid, (priv->hwver>>8), ((priv->hwver>>4)&0xf),
 		(priv->hwver&0xf), priv->hwctg);
-	dev_info(priv->dev, " EIP96 HW%d.%d.%d, EIP202 HW%d.%d.%d, EIP207 HW%d.%d.%d\n",
+	dev_info(priv->dev, " EIP96 HW%d.%d.%d, EIP202 HW%d.%d.%d, EIP207 HW%d.%d.%d",
 		(priv->pever>>8),  ((priv->pever>>4)&0xf),  (priv->pever&0xf),
 		(priv->hiaver>>8), ((priv->hiaver>>4)&0xf), (priv->hiaver&0xf),
 		(priv->csver>>8),  ((priv->csver>>4)&0xf),  (priv->csver&0xf));
-	dev_info(priv->dev, " HW has %d processing pipes, %d rings and %d ring AICs, dwidth %d bits, cfsize %d words, rfsize %d words\n",
+	dev_info(priv->dev, " HW has %d processing pipes, %d rings and %d ring AICs, dwidth %d bits, cfsize %d words, rfsize %d words",
 		priv->hwnumpes, priv->hwnumrings, priv->hwnumraic,
 		(1<<(priv->hwdataw+5)), (1<<priv->hwcfsize),
 		(1<<priv->hwrfsize));
-	dev_info(priv->dev, " PEARB=%d, ICE=%d, OCE=%d, HWTB=%d, VIRT=%d, DRBG=%d, FRC=%d, TRC=%d\n",
+	dev_info(priv->dev, " PEARB=%d, ICE=%d, OCE=%d, HWTB=%d, VIRT=%d, DRBG=%d, FRC=%d, TRC=%d",
 		((priv->feat_flags&EIP197_PE_ARB) != 0),
 		((priv->feat_flags&EIP197_ICE) != 0),
 		((priv->feat_flags&EIP197_OCE) != 0),
@@ -2174,42 +2197,57 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 		 (1<<(((hwopt>>13)&7)+3)), (1<<((hwopt>>16)&15)));
 
 	if (priv->algo_flags & ALGO_ARC4)
-		dev_info(priv->dev, " HW supports ARC4 stream cipher\n");
+		dev_info(priv->dev, " HW supports ARC4 stream cipher");
 	if (priv->algo_flags & ALGO_DES)
-		dev_info(priv->dev, " HW supports DES & 3DES block ciphers\n");
-	if (priv->algo_flags & ALGO_AES_XTS)
-		dev_info(priv->dev, " HW supports AES block cipher, with XTS support\n");
-	else if (priv->algo_flags && ALGO_AES)
-		dev_info(priv->dev, " HW supports AES block cipher (no XTS)\n");
+		dev_info(priv->dev, " HW supports DES & 3DES block ciphers%s",
+			 (priv->algo_flags & ALGO_DES_XFB) ?
+			 	", with CFB/OFB support" :
+			 	" (no CFB/OFB)");
+	if (priv->algo_flags && ALGO_AES)
+		dev_info(priv->dev, " HW supports AES block cipher%s%s",
+			 (priv->algo_flags & ALGO_AES_XFB) ?
+				", with CFB/OFB support" :
+				" (no CFB/OFB)",
+			 (priv->algo_flags & ALGO_AES_XTS) ?
+				", with XTS support" :
+				" (no XTS)");
 	if (priv->algo_flags & ALGO_CHACHA20)
-		dev_info(priv->dev, " HW supports CHACHA20 stream cipher\n");
+		dev_info(priv->dev, " HW supports CHACHA20 stream cipher");
 	if (priv->algo_flags & ALGO_SM4)
-		dev_info(priv->dev, " HW supports SM4 block cipher\n");
+		dev_info(priv->dev, " HW supports SM4 block cipher");
 	if (priv->algo_flags & ALGO_BC0)
-		dev_info(priv->dev, " HW supports external block cipher\n");
+		dev_info(priv->dev, " HW supports external block cipher");
 	if (priv->algo_flags & ALGO_WIRELESS)
-		dev_info(priv->dev, " HW supports SNOW3G, ZUC and Kasumi ciphers (incl. auth)\n");
+		dev_info(priv->dev, " HW supports SNOW3G, ZUC and Kasumi ciphers (incl. auth)");
 	if (priv->algo_flags & ALGO_MD5)
-		dev_info(priv->dev, " HW supports MD5 hash and HMAC\n");
+		dev_info(priv->dev, " HW supports MD5 hash and HMAC");
 	if (priv->algo_flags & ALGO_SHA1)
-		dev_info(priv->dev, " HW supports SHA1 hash and HMAC\n");
+		dev_info(priv->dev, " HW supports SHA1 hash and HMAC");
 	if (priv->algo_flags & ALGO_SHA2_256)
-		dev_info(priv->dev, " HW supports SHA2-224 and SHA2-256 hash and HMAC\n");
+		dev_info(priv->dev, " HW supports SHA2-224 and SHA2-256 hash and HMAC");
 	if (priv->algo_flags & ALGO_SHA2_512)
-		dev_info(priv->dev, " HW supports SHA2-384 and SHA2-512 hash and HMAC\n");
+		dev_info(priv->dev, " HW supports SHA2-384 and SHA2-512 hash and HMAC");
 	if (priv->algo_flags & ALGO_SHA3)
-		dev_info(priv->dev, " HW supports SHA3 hash, KHASH and HMAC\n");
-	if (priv->algo_flags & ALGO_XCBC_MAC)
-		dev_info(priv->dev, " HW supports AES-XCBC-MAC, AES-CBC-MAC and AES-CMAC\n");
+		dev_info(priv->dev, " HW supports SHA3 hash, KHASH and HMAC");
+	if (priv->algo_flags & ALGO_XCBC_MAC) {
+		dev_info(priv->dev, " HW supports AES-XCBC-MAC, AES-CBC-MAC and AES-CMAC %s",
+			 (priv->algo_flags & ALGO_CBC_MAC_ALL) ?
+				"(all keysizes)" :
+				"(128 bit keys only)");
+	}
 	if (priv->algo_flags & ALGO_GHASH)
-		dev_info(priv->dev, " HW supports GHASH hash (i.e. for AES-GCM and AES-GMAC)\n");
+		dev_info(priv->dev, " HW supports GHASH hash (i.e. for AES-GCM and AES-GMAC)");
 	if (priv->algo_flags & ALGO_SM3)
 		dev_info(priv->dev, " HW supports SM3 hash and HMAC\n");
 	if (priv->algo_flags & ALGO_POLY1305)
-		dev_info(priv->dev, " HW supports POLY1305 MAC (i.e. for Chacha20/Poly1305)\n");
+		dev_info(priv->dev, " HW supports POLY1305 MAC (i.e. for Chacha20/Poly1305)");
+	if (priv->algo_flags & SEQMASK_256)
+		dev_info(priv->dev, " HW supports 256 bit sequence number masks");
+	if (priv->algo_flags & SEQMASK_384)
+		dev_info(priv->dev, " HW supports 384 bit sequence number masks");
 
 	if (priv->hwnumraic < 1) {
-		dev_err(priv->dev, "No ring AIC's found - this driver needs at least 1!\n");
+		dev_err(priv->dev, "No ring AIC's found - this driver needs at least 1!");
 		return -ENODEV;
 	}
 
@@ -2253,7 +2291,7 @@ static int safexcel_probe(struct platform_device *pdev)
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	priv->base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(priv->base)) {
-		dev_err(dev, "failed to get resource\n");
+		dev_err(dev, "failed to get resource");
 		return PTR_ERR(priv->base);
 	}
 
@@ -2266,7 +2304,7 @@ static int safexcel_probe(struct platform_device *pdev)
 
 		ret = clk_prepare_enable(priv->clk);
 		if (ret) {
-			dev_err(dev, "unable to enable clk (%d)\n", ret);
+			dev_err(dev, "unable to enable clk (%d)", ret);
 			return ret;
 		}
 	}
@@ -2280,7 +2318,7 @@ static int safexcel_probe(struct platform_device *pdev)
 
 		ret = clk_prepare_enable(priv->reg_clk);
 		if (ret) {
-			dev_err(dev, "unable to enable reg clk (%d)\n", ret);
+			dev_err(dev, "unable to enable reg clk (%d)", ret);
 			goto err_core_clk;
 		}
 	}
@@ -2367,13 +2405,13 @@ static int safexcel_probe(struct platform_device *pdev)
 
 	ret = safexcel_hw_init(priv);
 	if (ret) {
-		dev_err(dev, "EIP h/w init failed (%d)\n", ret);
+		dev_err(dev, "EIP(1)97 h/w init failed (%d)", ret);
 		goto err_reg_clk;
 	}
 
 	ret = safexcel_register_algorithms(priv);
 	if (ret) {
-		dev_err(dev, "Failed to register algorithms (%d)\n", ret);
+		dev_err(dev, "Failed to register algorithms (%d)", ret);
 		goto err_reg_clk;
 	}
 
@@ -2405,6 +2443,7 @@ static int safexcel_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id safexcel_of_match_table[] = {
+	/* Marvell specific entries */
 	{
 		.compatible = "inside-secure,safexcel-eip97ies",
 		.data = (void *)MRVL_EIP97IES,
@@ -2417,15 +2456,14 @@ static const struct of_device_id safexcel_of_match_table[] = {
 		.compatible = "inside-secure,safexcel-eip197d",
 		.data = (void *)MRVL_EIP197D,
 	},
+	/* Intended for generic use */
 	{
-		/* Deprecated. Kept for backward compatibility. */
 		.compatible = "inside-secure,safexcel-eip97",
-		.data = (void *)MRVL_EIP97IES,
+		.data = NULL,
 	},
 	{
-		/* Deprecated. Kept for backward compatibility. */
 		.compatible = "inside-secure,safexcel-eip197",
-		.data = (void *)MRVL_EIP197B,
+		.data = NULL,
 	},
 	{},
 };
@@ -2455,13 +2493,13 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 	int rc, i, msibase;
 	u32 val;
 
-	dev_info(dev, "Probing PCIE device: vendor %04x, device %04x, subv %04x, subdev %04x, ctxt %lx\n",
+	dev_info(dev, "Probing PCIE device: vendor %04x, device %04x, subv %04x, subdev %04x, ctxt %lx",
 			ent->vendor, ent->device, ent->subvendor,
 			ent->subdevice, ent->driver_data);
 
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv) {
-		dev_err(dev, "Failed to allocate memory\n");
+		dev_err(dev, "Failed to allocate memory");
 		return -ENOMEM;
 	}
 
@@ -2473,14 +2511,14 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 	/* enable the device */
 	rc = pcim_enable_device(pdev);
 	if (rc) {
-		dev_err(dev, "pci_enable_device() failed\n");
+		dev_err(dev, "pci_enable_device() failed");
 		return rc;
 	}
 
 	/* take ownership of PCI BAR0 */
 	rc = pcim_iomap_regions(pdev, 1, "crypto_safexcel");
 	if (rc) {
-		dev_err(dev, "pcim_iomap_regions() failed for BAR0\n");
+		dev_err(dev, "pcim_iomap_regions() failed for BAR0");
 		return rc;
 	}
 	priv->base = pcim_iomap_table(pdev)[0];
@@ -2489,7 +2527,7 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 	msibase = 1;
 
 	if (priv->ctxt_flags & XILINX_PCIE) {
-		dev_info(dev, "Device identified as FPGA based development board - applying HW reset\n");
+		dev_info(dev, "Device identified as FPGA based development board - applying HW reset");
 
 		msibase = 0; /* Older devboards map everything to MSI #0 ... */
 		rc = pcim_iomap_regions(pdev, 4, "crypto_safexcel");
@@ -2497,7 +2535,7 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 			pciebase = pcim_iomap_table(pdev)[2];
 			val = readl(pciebase + XILINX_IRQ_BLOCK_ID);
 			if ((val >> 16) == 0x1fc2) {
-				dev_info(dev, "Detected Xilinx PCIE IRQ block version %d, multiple MSI support enabled\n",
+				dev_info(dev, "Detected Xilinx PCIE IRQ block version %d, multiple MSI support enabled",
 					 (val & 0xff));
 
 				/* Setup identity map mapping irq #n to MSI#n */
@@ -2516,7 +2554,7 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 				/* We have unique MSI vecs for the rings now */
 				msibase = 1;
 			} else {
-				dev_info(dev, "Unrecognised IRQ block identifier %x\n",
+				dev_info(dev, "Unrecognised IRQ block identifier %x",
 					 val);
 			}
 		}
@@ -2525,7 +2563,7 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 			 * Older dev board. All interrupts mapped to MSI #0
 			 * Therefore, we can only support 1 ring for now!
 			 */
-			dev_info(dev, "Xilinx PCIE IRQ block not detected, using only MSI #0 with 1 ring\n");
+			dev_info(dev, "Xilinx PCIE IRQ block not detected, using only MSI #0 with 1 ring");
 			max_rings = 1;
 		}
 
@@ -2552,7 +2590,7 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 				   msibase + priv->config.rings,
 				   PCI_IRQ_MSI|PCI_IRQ_MSIX);
 	if (rc < 0) {
-		dev_err(dev, "Failed to allocate PCI MSI interrupts\n");
+		dev_err(dev, "Failed to allocate PCI MSI interrupts");
 		return rc;
 	}
 
@@ -2561,7 +2599,7 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 				  sizeof(*priv->ring),
 				  GFP_KERNEL);
 	if (!priv->ring) {
-		dev_err(dev, "Failed to allocate ring memory\n");
+		dev_err(dev, "Failed to allocate ring memory");
 		return -ENOMEM;
 	}
 
@@ -2574,7 +2612,7 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 						     &priv->ring[i].cdr,
 						     &priv->ring[i].rdr);
 		if (rc) {
-			dev_err(dev, "Failed to initialize rings\n");
+			dev_err(dev, "Failed to initialize rings");
 			return rc;
 		}
 
@@ -2583,14 +2621,14 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 			sizeof(priv->ring[i].rdr_req),
 			GFP_KERNEL);
 		if (!priv->ring[i].rdr_req) {
-			dev_err(dev, "Failed to allocate RDR async request queue for ring %d\n",
+			dev_err(dev, "Failed to allocate RDR async request queue for ring %d",
 				i);
 			return -ENOMEM;
 		}
 
 		ring_irq = devm_kzalloc(dev, sizeof(*ring_irq), GFP_KERNEL);
 		if (!ring_irq) {
-			dev_err(dev, "Failed to allocate IRQ data for ring %d\n",
+			dev_err(dev, "Failed to allocate IRQ data for ring %d",
 				i);
 			return -ENOMEM;
 		}
@@ -2602,7 +2640,7 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 						    safexcel_irq_ring_thread,
 						    ring_irq);
 		if (irq < 0) {
-			dev_err(dev, "Failed to get IRQ ID for ring %d\n", i);
+			dev_err(dev, "Failed to get IRQ ID for ring %d", i);
 			return irq;
 		}
 
@@ -2613,7 +2651,7 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 		snprintf(wq_name, 9, "wq_ring%d", i);
 		priv->ring[i].workqueue = create_singlethread_workqueue(wq_name);
 		if (!priv->ring[i].workqueue) {
-			dev_err(dev, "Failed to create work queue for ring %d\n",
+			dev_err(dev, "Failed to create work queue for ring %d",
 				i);
 			return -ENOMEM;
 		}
@@ -2630,13 +2668,13 @@ static int crypto_is_pci_probe(struct pci_dev *pdev,
 
 	rc = safexcel_hw_init(priv);
 	if (rc) {
-		dev_err(dev, "EIP(1)97 h/w init failed (%d)\n", rc);
+		dev_err(dev, "EIP(1)97 h/w init failed (%d)", rc);
 		return rc;
 	}
 
 	rc = safexcel_register_algorithms(priv);
 	if (rc) {
-		dev_err(dev, "Failed to register algorithms (%d)\n", rc);
+		dev_err(dev, "Failed to register algorithms (%d)", rc);
 		return rc;
 	}
 
