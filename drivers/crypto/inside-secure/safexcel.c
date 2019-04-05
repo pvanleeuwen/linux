@@ -33,6 +33,9 @@ MODULE_PARM_DESC(nofw, "Set to 1 to force skipping of firmware download");
 static u32 max_rings= 255;
 module_param(max_rings, uint, 0644);
 MODULE_PARM_DESC(max_rings, "Maximum number of rings to use, default=all. Use more rings to spread the load over multiple CPUs");
+static u32 max_pipes=255;
+module_param(max_pipes, uint, 0644);
+MODULE_PARM_DESC(max_pipes, "Maximum number of pipes to use, default=all.");
 static u32 ring_entries; // default=0=autoconfig
 module_param(ring_entries, uint, 0644);
 MODULE_PARM_DESC(ring_entries, "Number of entries per ring. 0(default)=auto-configure");
@@ -56,6 +59,18 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 	int i, cs_rc_max, cs_ht_wc, cs_ht_sz;
 	int maxbanks, actbank, curbank, lrgrecsz;
 	u32 addrhi, addrlo, addrmid, dsize, asize;
+
+	/* 
+	 * Map all interfaces/rings to register index 0
+	 * so they can share contexts. Without this, the EIP197 will
+	 * assume each interface/ring to be in its own memory domain 
+	 * i.e. have its own subset of UNIQUE memory addresses.
+	 * Which would cause records with the SAME memory address to
+	 * use DIFFERENT cache buffers, causing both poor cache utilization
+	 * AND serious coherence/invalidation issues.
+	 */
+	for (i=0; i < 4; i++)	
+		writel(0, priv->base + EIP197_FLUE_IFC_LUT(i));
 
 	/*
 	 *Enable the record cache memory access and
@@ -195,9 +210,9 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 	 * Step #1: How many records will physically fit?
 	 * Hard upper limit is 1023!
 	 */
-	cs_rc_max = min((int) ((dsize>>2) / lrgrecsz), 1023);
+	cs_rc_max = min_t(uint, ((dsize>>2) / lrgrecsz), 1023);
 	/* Step #2: Need at least 2 words in the admin RAM per record */
-	cs_rc_max = min(cs_rc_max, (int) (asize>>1));
+	cs_rc_max = min_t(uint, cs_rc_max, (asize>>1));
 	/* Step #3: Determine log2 of hash table size */
 	cs_ht_sz = __fls(asize - cs_rc_max) - 2;
 	cs_ht_wc = 16<<cs_ht_sz; // dwords, not admin words
@@ -816,8 +831,8 @@ static int safexcel_hw_setup_cdesc_rings(struct safexcel_crypto_priv *priv)
 	if (priv->feat_flags & HW_IS_EIP197) {
 		/* EIP197: try to fetch enough in 1 go to keep all pipes busy */
 		cd_fetch_cnt = (1 << priv->hwcfsize) / cd_size_rnd;
-		cd_fetch_cnt = min(cd_fetch_cnt,
-				   (priv->hwnumpes * EIP197_FETCH_DEPTH));
+		cd_fetch_cnt = min_t(uint, cd_fetch_cnt,
+				     (priv->config.pes * EIP197_FETCH_DEPTH));
 	} else {
 		/* for the EIP97, just fetch all that fits minus 1 */
 		cd_fetch_cnt = ((1 << priv->hwcfsize) / cd_size_rnd) - 1;
@@ -868,8 +883,8 @@ static int safexcel_hw_setup_rdesc_rings(struct safexcel_crypto_priv *priv)
 	if (priv->feat_flags & HW_IS_EIP197) {
 		/* EIP197: try to fetch enough in 1 go to keep all pipes busy */
 		rd_fetch_cnt = (1 << priv->hwrfsize) / rd_size_rnd;
-		rd_fetch_cnt = min(rd_fetch_cnt,
-				   (priv->hwnumpes * EIP197_FETCH_DEPTH));
+		rd_fetch_cnt = min_t(uint, rd_fetch_cnt,
+				     (priv->config.pes * EIP197_FETCH_DEPTH));
 	} else {
 		/* for the EIP97, just fetch all that fits minus 1 */
 		rd_fetch_cnt = ((1 << priv->hwrfsize) / rd_size_rnd) - 1;
@@ -963,9 +978,9 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 	u32 rnddwrds[12];
 
 	/* Need to clip to 4 Kbyte max (AXI decode boundary) */
-	burst_size = min_t(u32, (10 - priv->hwdataw), burst_size);
+	burst_size = min_t(uint, (10 - priv->hwdataw), burst_size);
 	/* And 256 beats max (AXI4 maximum) */
-	burst_size = min_t(u32, 8, burst_size);
+	burst_size = min_t(uint, 8, burst_size);
 
 	dev_info(priv->dev, "EIP(1)97 HW init: burst size %d beats, using %d pipe(s) and %d ring(s)",
 			(1<<burst_size), priv->config.pes, priv->config.rings);
@@ -997,8 +1012,8 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 	 */
 	if (priv->ctxt_flags & DEVICE_IS_PCI) {
 		val |= EIP197_HIA_MST_CTRL_XFR_ALIGN(__fls(cache_line_size()));
-		ctxalign = max_t(int, (__fls(cache_line_size()) - 5), 0);
-		ctxalign = min_t(int, ctxalign, 3);
+		ctxalign = max_t(uint, (__fls(cache_line_size()) - 5), 0);
+		ctxalign = min_t(uint, ctxalign, 3);
 		dev_info(priv->dev, "EIP(1)97 HW init: align transfers to %d bytes, ctxt writes to %d bytes",
 				cache_line_size(), (32<<ctxalign));
 	} else {
@@ -1028,7 +1043,7 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 	ipbufhi = 9;
 	itbuflo = 6;
 	itbufhi = 7;
-	if (priv->hwnumpes > 4) {
+	if (priv->config.pes > 4) {
 		/* Need higher thresholds for the high pipecount engines */
 		opbuflo = 9;
 		opbufhi = 10;
@@ -1360,7 +1375,7 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 static void safexcel_try_push_requests(struct safexcel_crypto_priv *priv,
 				       int ring)
 {
-	int coal = min_t(int, priv->ring[ring].requests, EIP197_MAX_BATCH_SZ);
+	int coal = min_t(uint, priv->ring[ring].requests, EIP197_MAX_BATCH_SZ);
 
 	/* Configure when we want an interrupt */
 	writel(EIP197_HIA_RDR_THRESH_PKT_MODE |
@@ -1864,18 +1879,21 @@ static void safexcel_configure(struct safexcel_crypto_priv *priv)
 {
 	u32 mask, pedepth;
 
-	/* for now, just configure all PEs the HW has ... */
-	priv->config.pes = priv->hwnumpes;
-
-	if (max_rings < 0) {
-		dev_err(priv->dev, "Param max_rings must be >1! Assuming minimum of 1");
+	if (max_rings < 1) {
+		dev_err(priv->dev, "Param max_rings must be >=1! Assuming minimum of 1");
 		max_rings = 1;
+	}
+	if (max_pipes < 1) {
+		dev_err(priv->dev, "Param max_pipes must be >=1! Assuming minimum of 1");
+		max_pipes = 1;
 	}
 
 	/* number of rings to use can be limited by param */
-	priv->config.rings = min_t(u32, priv->hwnumrings, max_rings);
+	priv->config.rings = min_t(uint, priv->hwnumrings, max_rings);
 	/* and by the number of ring AIC's, as we need 1 per ring we manage! */
-	priv->config.rings = min_t(u32, priv->config.rings, priv->hwnumraic);
+	priv->config.rings = min_t(uint, priv->config.rings, priv->hwnumraic);
+	/* number of pipes to use can be limited by param */
+	priv->config.pes = min_t(uint, priv->hwnumpes, max_pipes);
 
 	if (priv->feat_flags & EIP197_OCE)
 		pedepth = EIP197_PKTS_PER_PE_OCE;

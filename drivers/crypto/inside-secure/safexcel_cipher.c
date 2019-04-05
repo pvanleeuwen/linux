@@ -570,6 +570,10 @@ static int safexcel_skcipher_handle_result(struct safexcel_crypto_priv *priv,
 		err = safexcel_handle_req_result(priv, ring, async, req->src,
 						 req->dst, req->cryptlen, sreq,
 						 should_complete, ret);
+						 
+		/* Update IV in req for CBC modes */
+		if (req) {
+		}
 	}
 
 	return err;

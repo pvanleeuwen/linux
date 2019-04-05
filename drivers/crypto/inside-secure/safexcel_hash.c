@@ -122,12 +122,12 @@ static void safexcel_context_control(struct safexcel_ahash_ctx *ctx,
 				count += ((0xffffffff / EIP197_COUNTER_BLOCK_SIZE) *
 					  req->processed[1]);
 
-				/* This is a haredware limitation, as the
+				/* This is a hardware limitation, as the
 				 * counter must fit into an u32. This represents
-				 * a farily big amount of input data, so we
+				 * a fairly big amount of input data, so we
 				 * shouldn't see this.
 				 */
-				if (unlikely(count & 0xffff0000)) {
+				if (unlikely(count & 0xffffffff00000000ULL)) {
 					dev_warn(priv->dev,
 						 "Input data is too big\n");
 					return;

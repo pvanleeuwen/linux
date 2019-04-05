@@ -238,13 +238,15 @@ struct safexcel_command_desc *safexcel_add_cdesc(struct safexcel_crypto_priv *pr
 
 		cdesc->control_data.packet_length = full_data_len;
 		cdesc->control_data.options = EIP197_OPTION_MAGIC_VALUE |
-					      EIP197_OPTION_64BIT_CTX |
+					      EIP197_OPTION_64BIT_CTX   |
+					      EIP197_OPTION_CTX_TYPE    |
+					      EIP197_OPTION_REUSE_CTX	|
+					      EIP197_OPTION_TOO         |
 					      EIP197_OPTION_CTX_CTRL_IN_CMD;
 		cdesc->control_data.context_lo =
 			(lower_32_bits(context) & GENMASK(31, 2)) >> 2;
 		cdesc->control_data.context_hi = upper_32_bits(context);
 
-		/* TODO: HMAC with SHA-384/512 uses large xform records*/
 		cdesc->control_data.ptrtype = EIP197_PTRTYPE_XFORM_SMALL;
 
 		for (i = 0; i < EIP197_MAX_TOKENS; i++)

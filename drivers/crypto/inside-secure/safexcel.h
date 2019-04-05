@@ -219,6 +219,7 @@
 #define EIP197_TRC_ECCADMINSTAT			0xf0838
 #define EIP197_TRC_ECCDATASTAT			0xf083c
 #define EIP197_TRC_ECCDATA			0xf0840
+#define EIP197_FLUE_IFC_LUT(n)			(0xf6820 + (4 * (n)))
 #define EIP197_DRBG_INPUT_OUTPUT(n)		(0xf7000 + (4 * (n)))
 #define EIP197_DRBG_STATUS			0xf7010
 #define EIP197_DRBG_CONTROL			0xf7014
@@ -620,6 +621,9 @@ struct safexcel_control_data_desc {
 
 #define EIP197_OPTION_MAGIC_VALUE	BIT(0)
 #define EIP197_OPTION_64BIT_CTX		BIT(1)
+#define EIP197_OPTION_CTX_TYPE	 	BIT(2)
+#define EIP197_OPTION_REUSE_CTX 	BIT(4)
+#define EIP197_OPTION_TOO	 	BIT(5)
 #define EIP197_OPTION_CTX_CTRL_IN_CMD	BIT(8)
 #define EIP197_OPTION_2_TOKEN_IV_CMD	GENMASK(11, 10)
 #define EIP197_OPTION_4_TOKEN_IV_CMD	GENMASK(11, 9)
@@ -693,7 +697,7 @@ enum safexcel_alg_type {
 
 struct safexcel_config {
 	u32 pes;
-	u32 rings;
+	u32 rings;	
 	u32 ring_entries;
 	u32 queue_entries;
 
