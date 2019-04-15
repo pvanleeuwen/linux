@@ -159,7 +159,7 @@ static int safexcel_handle_req_result(struct safexcel_crypto_priv *priv,
 	struct ahash_request *areq = ahash_request_cast(async);
 	struct crypto_ahash *ahash = crypto_ahash_reqtfm(areq);
 	struct safexcel_ahash_req *sreq = ahash_request_ctx(areq);
-	struct safexcel_ahash_ctx *ctx = crypto_ahash_ctx(crypto_ahash_reqtfm(areq));
+	struct safexcel_ahash_ctx *ctx = crypto_ahash_ctx(ahash);
 	void *read = priv->ring[ring].rdr.read;
 	u64 cache_len;
 
