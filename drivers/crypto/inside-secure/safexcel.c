@@ -1487,10 +1487,19 @@ finalize:
 inline int safexcel_rdesc_check_errors(struct safexcel_crypto_priv *priv,
 				       void *rdesc)
 {
+	struct safexcel_result_desc *result_desc = rdesc;
 	struct result_data_desc *result_data = rdesc + priv->config.res_offset;
 
-	if (likely(!result_data->error_code))
+	if (likely((!result_desc->descriptor_overflow) && 
+		   (!result_desc->buffer_overflow) && 
+		   (!result_data->error_code)))
 		return 0;
+		
+	if (result_desc->descriptor_overflow)
+		dev_err(priv->dev, "Descriptor overflow detected");		
+
+	if (result_desc->buffer_overflow)
+		dev_err(priv->dev, "Buffer overflow detected");		
 
 	if (result_data->error_code & 0x407f) {
 		/* Fatal error (bits 0-7, 14) */
@@ -1502,7 +1511,7 @@ inline int safexcel_rdesc_check_errors(struct safexcel_crypto_priv *priv,
 		/* Authentication failed */
 		return -EBADMSG;
 	}
-
+	
 	/* All other non-fatal errors */
 	return -EINVAL;
 }

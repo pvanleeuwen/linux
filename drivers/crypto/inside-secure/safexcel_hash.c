@@ -1019,21 +1019,16 @@ static int safexcel_hmac_alg_setkey(struct crypto_ahash *tfm, const u8 *key,
 	struct safexcel_ahash_ctx *ctx = crypto_tfm_ctx(crypto_ahash_tfm(tfm));
 	struct safexcel_crypto_priv *priv = ctx->priv;
 	struct safexcel_ahash_export_state istate, ostate;
-	int ret, i;
+	int ret;
 
 	ret = safexcel_hmac_setkey(alg, key, keylen, &istate, &ostate);
 	if (ret)
 		return ret;
 
-	if ((priv->feat_flags & EIP197_NEED_INV) && ctx->base.ctxr) {
-		for (i = 0; i < state_sz / sizeof(u32); i++) {
-			if (ctx->ipad[i] != istate.state[i] ||
-			    ctx->opad[i] != ostate.state[i]) {
-				ctx->base.needs_inv = true;
-				break;
-			}
-		}
-	}
+	if ((priv->feat_flags & EIP197_NEED_INV) && ctx->base.ctxr &&
+	    (memcmp(ctx->ipad, istate.state, state_sz) ||
+	     memcmp(ctx->opad, ostate.state, state_sz)))
+		ctx->base.needs_inv = true;
 
 	memcpy(ctx->ipad,  &istate.state, state_sz);
 	memcpy(ctx->opad,  &ostate.state, state_sz);

@@ -513,7 +513,7 @@ struct result_data_desc {
 	u16 application_id;
 	u16 rsvd1;
 
-	u32 rsvd2;
+	u32 rsvd2[5];
 } __packed;
 
 
@@ -592,7 +592,7 @@ static inline void eip197_noop_token(struct safexcel_token *token)
 #define EIP197_TOKEN_INS_INSERT_HASH_DIGEST	0x1c
 #define EIP197_TOKEN_INS_TYPE_OUTPUT		BIT(5)
 #define EIP197_TOKEN_INS_TYPE_HASH		BIT(6)
-#define EIP197_TOKEN_INS_TYPE_CRYTO		BIT(7)
+#define EIP197_TOKEN_INS_TYPE_CRYPTO		BIT(7)
 #define EIP197_TOKEN_INS_LAST			BIT(8)
 
 /* Processing Engine Control Data  */

@@ -52,6 +52,7 @@ struct safexcel_cipher_ctx {
 struct safexcel_cipher_req {
 	enum safexcel_cipher_direction direction;
 	bool needs_inv;
+	int  nr_src, nr_dst;
 	u8   input_iv[AES_BLOCK_SIZE];
 };
 
@@ -90,7 +91,7 @@ static void safexcel_skcipher_token(struct safexcel_cipher_ctx *ctx, u8 *iv,
 	token[0].stat = EIP197_TOKEN_STAT_LAST_PACKET |
 			EIP197_TOKEN_STAT_LAST_HASH;
 	token[0].instructions = EIP197_TOKEN_INS_LAST |
-				EIP197_TOKEN_INS_TYPE_CRYTO |
+				EIP197_TOKEN_INS_TYPE_CRYPTO |
 				EIP197_TOKEN_INS_TYPE_OUTPUT;
 }
 
@@ -116,14 +117,13 @@ static void safexcel_aead_token(struct safexcel_cipher_ctx *ctx, u8 *iv,
 
 	token[0].opcode = EIP197_TOKEN_OPCODE_DIRECTION;
 	token[0].packet_length = assoclen;
-	token[0].instructions = EIP197_TOKEN_INS_TYPE_HASH |
-				EIP197_TOKEN_INS_TYPE_OUTPUT;
+	token[0].instructions = EIP197_TOKEN_INS_TYPE_HASH;
 
 	token[1].opcode = EIP197_TOKEN_OPCODE_DIRECTION;
 	token[1].packet_length = cryptlen;
 	token[1].stat = EIP197_TOKEN_STAT_LAST_HASH;
 	token[1].instructions = EIP197_TOKEN_INS_LAST |
-				EIP197_TOKEN_INS_TYPE_CRYTO |
+				EIP197_TOKEN_INS_TYPE_CRYPTO |
 				EIP197_TOKEN_INS_TYPE_HASH |
 				EIP197_TOKEN_INS_TYPE_OUTPUT;
 
@@ -357,26 +357,20 @@ static int safexcel_handle_req_result(struct safexcel_crypto_priv *priv, int rin
 	priv->ring[ring].rdr.read = read;
 
 	if (src == dst) {
-		dma_unmap_sg(priv->dev, src,
-			     sg_nents_for_len(src, cryptlen),
-			     DMA_BIDIRECTIONAL);
+		dma_unmap_sg(priv->dev, src, sreq->nr_src, DMA_BIDIRECTIONAL);
 	} else {
-		dma_unmap_sg(priv->dev, src,
-			     sg_nents_for_len(src, cryptlen),
-			     DMA_TO_DEVICE);
-		dma_unmap_sg(priv->dev, dst,
-			     sg_nents_for_len(dst, cryptlen),
-			     DMA_FROM_DEVICE);
+		dma_unmap_sg(priv->dev, src, sreq->nr_src, DMA_TO_DEVICE);
+		dma_unmap_sg(priv->dev, dst, sreq->nr_dst, DMA_FROM_DEVICE);
 	}
 						 
 	/* 
 	 * Update IV in req from last crypto output word for CBC modes
 	 */
-	if (ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC) {
+	if ((!ctx->aead) && (ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC)) {
 		if (sreq->direction == SAFEXCEL_ENCRYPT) {
 			/* For encrypt take the last output word */
-			sg_pcopy_to_buffer(dst, sg_nents_for_len(dst, cryptlen), 
-					   areq->iv, crypto_skcipher_ivsize(skcipher), 
+			sg_pcopy_to_buffer(dst, sreq->nr_dst, areq->iv, 
+					   crypto_skcipher_ivsize(skcipher), 
 					   (cryptlen - crypto_skcipher_ivsize(skcipher)));
 		} else {
 			/* For decrypt we previously saved the IV */
@@ -404,59 +398,86 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 	struct safexcel_command_desc *cdesc;
 	struct safexcel_result_desc *rdesc, *first_rdesc = NULL;
 	struct scatterlist *sg;
-	unsigned int totlen = cryptlen + assoclen;
-	int nr_src, nr_dst, n_cdesc = 0, n_rdesc = 0, queued = totlen;
-	int i, ret = 0;
+	unsigned int totlen;
+	unsigned int totlen_src = cryptlen + assoclen;
+	unsigned int totlen_dst = totlen_src;
+	int n_cdesc = 0, n_rdesc = 0;
+	int queued, i, ret = 0;
+	bool first = true;
+
+	if (ctx->aead) {
+		/* 
+		 * AEAD has auth tag appended to output for encrypt and
+		 * removed from the output for decrypt!
+		 */
+		if (sreq->direction == SAFEXCEL_DECRYPT)
+			totlen_dst -= digestsize;
+		else
+			totlen_dst += digestsize;
+	}
+		
+	/* 
+	 * Remember actual input length, source buffer length may be
+	 * updated in case of inline operation below.
+	 */
+	totlen = totlen_src;
+	queued = totlen_src;
 
 	if (src == dst) {
-		nr_src = dma_map_sg(priv->dev, src,
-				    sg_nents_for_len(src, totlen),
-				    DMA_BIDIRECTIONAL);
-		nr_dst = nr_src;
-		if (!nr_src)
+		totlen_src = max(totlen_src, totlen_dst);
+		sreq->nr_src = sg_nents_for_len(src, totlen_src);
+		if (unlikely(sreq->nr_src <= 0)) {
+			dev_err(priv->dev, "In-place buffer not large enough (need %d bytes)!", 
+				totlen_src);
 			return -EINVAL;
+		}
+		sreq->nr_src = dma_map_sg(priv->dev, src, sreq->nr_src,
+					  DMA_BIDIRECTIONAL);
+		sreq->nr_dst = sreq->nr_src;
 	} else {
-		nr_src = dma_map_sg(priv->dev, src,
-				    sg_nents_for_len(src, totlen),
-				    DMA_TO_DEVICE);
-		if (!nr_src)
+		sreq->nr_src = sg_nents_for_len(src, totlen_src);
+		if (unlikely(sreq->nr_src <= 0)) {
+			dev_err(priv->dev, "Source buffer not large enough (need %d bytes)!",
+				totlen_src);
 			return -EINVAL;
+		}
+		sreq->nr_src = dma_map_sg(priv->dev, src, sreq->nr_src,
+					  DMA_TO_DEVICE);
 
-		nr_dst = dma_map_sg(priv->dev, dst,
-				    sg_nents_for_len(dst, totlen),
-				    DMA_FROM_DEVICE);
-		if (!nr_dst) {
-			dma_unmap_sg(priv->dev, src,
-				     sg_nents_for_len(src, totlen),
+		sreq->nr_dst = sg_nents_for_len(dst, totlen_dst);
+		if (unlikely(sreq->nr_dst <= 0)) {
+			dev_err(priv->dev, "Dest buffer not large enough (need %d bytes)!",
+				totlen_dst);
+			dma_unmap_sg(priv->dev, src, sreq->nr_src,
 				     DMA_TO_DEVICE);
 			return -EINVAL;
 		}
+		
+		sreq->nr_dst = dma_map_sg(priv->dev, dst, sreq->nr_dst,
+					  DMA_FROM_DEVICE);
 	}
 
 	memcpy(ctx->base.ctxr->data, ctx->key, ctx->key_len);
-
 	if (ctx->aead) {
 		memcpy(ctx->base.ctxr->data + ctx->key_len / sizeof(u32),
 		       ctx->ipad, ctx->state_sz);
 		memcpy(ctx->base.ctxr->data + (ctx->key_len + ctx->state_sz) /
 		       sizeof(u32),
 		       ctx->opad, ctx->state_sz);
-	}
-	
-	/* 
-	 * Save IV from last crypto input word for CBC modes in decrypt
-	 * direction. Need to do this first in case of inplace operation
-	 * as it will be overwritten.
-	 */
-	if ((ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC)  &&
-	    (sreq->direction == SAFEXCEL_DECRYPT)) {
-		sg_pcopy_to_buffer(src, nr_src, sreq->input_iv, 
+	} else if ((ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC)  &&
+		   (sreq->direction == SAFEXCEL_DECRYPT)) {
+		/* 
+	 	* Save IV from last crypto input word for CBC modes in decrypt
+		 * direction. Need to do this first in case of inplace operation
+		 * as it will be overwritten.
+		 */
+		sg_pcopy_to_buffer(src, sreq->nr_src, sreq->input_iv, 
 				   crypto_skcipher_ivsize(skcipher), 
-				   (totlen - crypto_skcipher_ivsize(skcipher)));
-	}	
+				   (totlen_src - crypto_skcipher_ivsize(skcipher)));
+	}
 
 	/* command descriptors */
-	for_each_sg(src, sg, nr_src, i) {
+	for_each_sg(src, sg, sreq->nr_src, i) {
 		int len = sg_dma_len(sg);
 
 		/* Do not overflow the request */
@@ -491,20 +512,59 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 	}
 
 	/* result descriptors */
-	for_each_sg(dst, sg, nr_dst, i) {
-		bool first = !i, last = (i == nr_dst - 1);
+	for_each_sg(dst, sg, sreq->nr_dst, i) {
+		bool last = (i == sreq->nr_dst - 1);
 		u32 len = sg_dma_len(sg);
-
-		rdesc = safexcel_add_rdesc(priv, ring, first, last,
-					   sg_dma_address(sg), len);
+		
+		/* only allow the part of the buffer we know we need */
+		if (len > totlen_dst)
+			len = totlen_dst; 
+		if (unlikely(!len))
+			break;
+		totlen_dst -= len;
+		
+		/* skip over AAD space in buffer - not written */
+		if (assoclen) {
+			if (assoclen >= len) {
+				assoclen -= len;
+				continue;
+			}
+			rdesc = safexcel_add_rdesc(priv, ring, first, last,
+						   sg_dma_address(sg) + assoclen,
+						   len - assoclen);
+			assoclen = 0;
+		} else {
+			rdesc = safexcel_add_rdesc(priv, ring, first, last,
+						   sg_dma_address(sg),
+						   len);
+		}
 		if (IS_ERR(rdesc)) {
 			/* No space left in the result descriptor ring */
 			ret = PTR_ERR(rdesc);
 			goto rdesc_rollback;
 		}
-		if (first)
+		if (first) {
 			first_rdesc = rdesc;
+			first = false;
+		}
 		n_rdesc++;
+	}
+	
+	if (first) {
+		/* 
+		 * Special case: AEAD decrypt with only AAD data.
+		 * In this case there is NO output data from the engine,
+		 * but the engine still needs a result descriptor!
+		 * Create a dummy one just for catching the result token.
+		 */
+		rdesc = safexcel_add_rdesc(priv, ring, true, true, 0, 0);
+		if (IS_ERR(rdesc)) {
+			/* No space left in the result descriptor ring */
+			ret = PTR_ERR(rdesc);
+			goto rdesc_rollback;
+		}
+		first_rdesc = rdesc;
+		n_rdesc = 1;
 	}
 
 	safexcel_rdr_req_set(priv, ring, first_rdesc, base);
@@ -521,16 +581,10 @@ cdesc_rollback:
 		safexcel_cdr_rollback_wptr(priv, &priv->ring[ring].cdr);
 
 	if (src == dst) {
-		dma_unmap_sg(priv->dev, src,
-			     sg_nents_for_len(src, totlen),
-			     DMA_BIDIRECTIONAL);
+		dma_unmap_sg(priv->dev, src, sreq->nr_src, DMA_BIDIRECTIONAL);
 	} else {
-		dma_unmap_sg(priv->dev, src,
-			     sg_nents_for_len(src, totlen),
-			     DMA_TO_DEVICE);
-		dma_unmap_sg(priv->dev, dst,
-			     sg_nents_for_len(dst, totlen),
-			     DMA_FROM_DEVICE);
+		dma_unmap_sg(priv->dev, src, sreq->nr_src, DMA_TO_DEVICE);
+		dma_unmap_sg(priv->dev, dst, sreq->nr_dst, DMA_FROM_DEVICE);
 	}
 
 	return ret;
@@ -602,8 +656,8 @@ static int safexcel_skcipher_handle_result(struct safexcel_crypto_priv *priv,
 						 should_complete, ret);
 	} else {
 		err = safexcel_handle_req_result(priv, ring, async, req->src,
-						 req->dst, req->cryptlen, sreq,
-						 should_complete, ret);
+						 req->dst, req->cryptlen, 
+						 sreq, should_complete, ret);
 	}
 
 	return err;
@@ -615,7 +669,6 @@ static int safexcel_aead_handle_result(struct safexcel_crypto_priv *priv,
 				       bool *should_complete, int *ret)
 {
 	struct aead_request *req = aead_request_cast(async);
-	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
 	struct safexcel_cipher_req *sreq = aead_request_ctx(req);
 	int err;
 
@@ -625,9 +678,7 @@ static int safexcel_aead_handle_result(struct safexcel_crypto_priv *priv,
 						 should_complete, ret);
 	} else {
 		err = safexcel_handle_req_result(priv, ring, async, req->src,
-						 req->dst,
-						 req->cryptlen +
-						 crypto_aead_authsize(tfm),
+						 req->dst, 0,
 						 sreq, should_complete, ret);
 	}
 
