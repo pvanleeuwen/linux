@@ -83,69 +83,87 @@ static void safexcel_context_control(struct safexcel_ahash_ctx *ctx,
 	struct safexcel_crypto_priv *priv = ctx->priv;
 	u64 count = 0;
 
-	cdesc->control_data.control0 |= CONTEXT_CONTROL_TYPE_HASH_OUT;
 	cdesc->control_data.control0 |= ctx->alg;
-
-	/* Compute digest count for hash/HMAC finish operations */
-	if (req->finish && (req->processed[1] ||
-	    (req->processed[0] > crypto_ahash_blocksize(ahash)) ||
-	    (req->processed[0] && (req->digest == CONTEXT_CONTROL_DIGEST_PRECOMPUTED)))) {
-		count = req->processed[0] / EIP197_COUNTER_BLOCK_SIZE;
-		count += ((0xffffffff / EIP197_COUNTER_BLOCK_SIZE) *
-			  req->processed[1]);
-
-		/* This is a hardware limitation, as the
-		 * counter must fit into an u32. This represents
-		 * a fairly big amount of input data, so we
-		 * shouldn't see this.
-		 */
-		if (unlikely(count & 0xffffffff00000000ULL)) {
-			dev_warn(priv->dev,
-				 "Input data is too big\n");
-			return;
-		}
-	}
 	
 	/*
 	 * Copy the input digest if needed, and setup the context
 	 * fields. Do this now as we need it to setup the first command
 	 * descriptor.
 	 */
-	if (req->processed[0] || req->processed[1]) {
-		memcpy(ctx->base.ctxr->data, req->state, req->state_sz);
-	} else { /* First block of basic hash only */
-		cdesc->control_data.control0 |= CONTEXT_CONTROL_RESTART_HASH;
+	if ((!req->processed[0]) && (!req->processed[1])) {
+		/* First - and possibly only - block of basic hash only */
+		if (req->finish) {
+			cdesc->control_data.control0 |= CONTEXT_CONTROL_TYPE_HASH_OUT |
+							CONTEXT_CONTROL_RESTART_HASH;
+		} else {
+			cdesc->control_data.control0 |= CONTEXT_CONTROL_TYPE_HASH_OUT |
+							CONTEXT_CONTROL_RESTART_HASH  |
+							CONTEXT_CONTROL_NO_FINISH_HASH;
+		}
+		return;
 	}
 
+	/* Hash continuation or HMAC, setup (inner) digest from state */
+	memcpy(ctx->base.ctxr->data, req->state, req->state_sz);
+
 	if (req->finish) {
+		/* Compute digest count for hash/HMAC finish operations */
+		if ((req->digest == CONTEXT_CONTROL_DIGEST_PRECOMPUTED) ||
+		    req->processed[1] ||
+		    (req->processed[0] != crypto_ahash_blocksize(ahash))) {
+			count = req->processed[0] / EIP197_COUNTER_BLOCK_SIZE;
+			count += ((0xffffffff / EIP197_COUNTER_BLOCK_SIZE) *
+				  req->processed[1]);
+	
+			/* This is a hardware limitation, as the
+			 * counter must fit into an u32. This represents
+			 * a fairly big amount of input data, so we
+			 * shouldn't see this.
+			 */
+			if (unlikely(count & 0xffffffff00000000ULL)) {
+				dev_warn(priv->dev,
+					 "Input data is too big\n");
+				return;
+			}
+		}
+
 		if ((req->digest == CONTEXT_CONTROL_DIGEST_PRECOMPUTED) ||
 		    /* PE HW < 4.4 cannot do HMAC continue, fake using hash */
 		    ((priv->pever < 0x440) &&
 		     (req->processed[1] || 
 		      (req->processed[0] != crypto_ahash_blocksize(ahash))))) {
-			cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE((req->state_sz >> 2) + 1);
+		      	/* Basic hash continue operation, need digest + cnt */
+			cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE((req->state_sz >> 2) + 1) |
+							CONTEXT_CONTROL_TYPE_HASH_OUT |
+							CONTEXT_CONTROL_DIGEST_PRECOMPUTED;
 			cdesc->control_data.control1 |= CONTEXT_CONTROL_DIGEST_CNT;
-			ctx->base.ctxr->data[req->state_sz / sizeof(u32)] = cpu_to_le32(count);
+			ctx->base.ctxr->data[req->state_sz >> 2] = cpu_to_le32(count);
 			req->digest = CONTEXT_CONTROL_DIGEST_PRECOMPUTED;
 		} else { /* HMAC */
-			memcpy(ctx->base.ctxr->data + req->state_sz / sizeof(u32),
+			/* Need outer digest for HMAC finalization */
+			memcpy(ctx->base.ctxr->data + (req->state_sz >> 2),
 	       		       ctx->opad, req->state_sz);
 
 			if (req->processed[1] || (req->processed[0] != crypto_ahash_blocksize(ahash))) {
 				/* HMAC continue - PE HW 4.4 and above can do this */
-				cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE((req->state_sz >> 1) + 1);
+				cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE((req->state_sz >> 1) + 1) |
+								CONTEXT_CONTROL_TYPE_HASH_OUT |
+								CONTEXT_CONTROL_DIGEST_HMAC;
 				cdesc->control_data.control1 |= CONTEXT_CONTROL_DIGEST_CNT;
-				ctx->base.ctxr->data[2 * req->state_sz / sizeof(u32)] = cpu_to_le32(count);
+				ctx->base.ctxr->data[req->state_sz >> 1] = cpu_to_le32(count);
 			} else {
-				cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE(req->state_sz >> 1);
+				/* Single pass HMAC - no digest count */
+				cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE(req->state_sz >> 1) |
+								CONTEXT_CONTROL_TYPE_HASH_OUT |
+								CONTEXT_CONTROL_DIGEST_HMAC;
 			}	
 		}
-	} else { /* Basic hash, do not close */
-		cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE(req->state_sz >> 2);
-		cdesc->control_data.control0 |= CONTEXT_CONTROL_NO_FINISH_HASH;
+	} else { /* Hash continuation, do not finish yet */
+		cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE(req->state_sz >> 2) |
+						CONTEXT_CONTROL_DIGEST_PRECOMPUTED |
+						CONTEXT_CONTROL_TYPE_HASH_OUT |
+						CONTEXT_CONTROL_NO_FINISH_HASH;
 	}
-	
-	cdesc->control_data.control0 |= req->digest;
 }
 
 static int safexcel_ahash_enqueue(struct ahash_request *areq);
@@ -196,7 +214,6 @@ static int safexcel_handle_req_result(struct safexcel_crypto_priv *priv,
 				 DMA_TO_DEVICE);
 		sreq->cache_dma = 0;
 	}
-
 
 	if (sreq->finish) {	
 		if (sreq->hmac && (sreq->digest != CONTEXT_CONTROL_DIGEST_HMAC)) {
@@ -584,22 +601,26 @@ static int safexcel_ahash_enqueue(struct ahash_request *areq)
 
 	if (ctx->base.ctxr) {
 		if ((priv->feat_flags & EIP197_NEED_INV) &&
-		    !ctx->base.needs_inv &&
-		    (req->processed[1] || 
-		    /* Something processed for basic hash, i.e. continuation */
-		     (req->processed[0] && (req->digest == CONTEXT_CONTROL_DIGEST_PRECOMPUTED)) ||
-		     ((req->digest == CONTEXT_CONTROL_DIGEST_HMAC) &&
-		    /* More than key^ipad processed for HMAC - continuation */ 
-		      ((req->processed[0] > crypto_ahash_blocksize(ahash)) ||
-		    /* Previous HMAC continuation overwrote idigest */  
-		       memcmp(ctx->base.ctxr->data, req->state, req->state_sz)))))
+		    (!ctx->base.needs_inv) && 
+		     /* only invalidate for continue or HMAC cases */
+		    (req->processed[0] || req->processed[1]) &&
+		    (/* invalidate for basic hash continuation finish */
+		     (req->finish && (req->digest == CONTEXT_CONTROL_DIGEST_PRECOMPUTED)) ||
+		     /* invalidate if (i)digest changed */
+		     memcmp(ctx->base.ctxr->data, req->state, req->state_sz) ||
+		     /* invalidate for HMAC continuation finish */
+		     (req->finish && (req->processed[1] || 
+		      (req->processed[0] != crypto_ahash_blocksize(ahash)))) ||
+		     /* invalidate for HMAC finish with odigest changed */
+		     (req->finish &&
+		      memcmp(ctx->base.ctxr->data + (req->state_sz>>2), 
+		      	     ctx->opad, req->state_sz))))
 			/* We're still setting needs_inv here, even though it is
 			 * cleared right away, because the needs_inv flag can be
 			 * set in other functions and we want to keep the same
 			 * logic.
 			 */
 			ctx->base.needs_inv = true;
-
 		if (ctx->base.needs_inv) {
 			ctx->base.needs_inv = false;
 			req->needs_inv = true;
