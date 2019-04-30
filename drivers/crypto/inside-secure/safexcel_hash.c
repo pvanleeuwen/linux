@@ -85,7 +85,7 @@ static void safexcel_context_control(struct safexcel_ahash_ctx *ctx,
 	u64 count = 0;
 
 	cdesc->control_data.control0 |= ctx->alg;
-	
+
 	/*
 	 * Copy the input digest if needed, and setup the context
 	 * fields. Do this now as we need it to setup the first command
@@ -94,12 +94,14 @@ static void safexcel_context_control(struct safexcel_ahash_ctx *ctx,
 	if ((!req->processed[0]) && (!req->processed[1])) {
 		/* First - and possibly only - block of basic hash only */
 		if (req->finish) {
-			cdesc->control_data.control0 |= CONTEXT_CONTROL_TYPE_HASH_OUT |
-							CONTEXT_CONTROL_RESTART_HASH;
+			cdesc->control_data.control0 |=
+				CONTEXT_CONTROL_TYPE_HASH_OUT |
+				CONTEXT_CONTROL_RESTART_HASH;
 		} else {
-			cdesc->control_data.control0 |= CONTEXT_CONTROL_TYPE_HASH_OUT |
-							CONTEXT_CONTROL_RESTART_HASH  |
-							CONTEXT_CONTROL_NO_FINISH_HASH;
+			cdesc->control_data.control0 |=
+				CONTEXT_CONTROL_TYPE_HASH_OUT |
+				CONTEXT_CONTROL_RESTART_HASH  |
+				CONTEXT_CONTROL_NO_FINISH_HASH;
 		}
 		return;
 	}
@@ -115,7 +117,7 @@ static void safexcel_context_control(struct safexcel_ahash_ctx *ctx,
 			count = req->processed[0] / EIP197_COUNTER_BLOCK_SIZE;
 			count += ((0x100000000ULL / EIP197_COUNTER_BLOCK_SIZE) *
 				  req->processed[1]);
-	
+
 			/* This is a hardware limitation, as the
 			 * counter must fit into an u32. This represents
 			 * a fairly big amount of input data, so we
@@ -131,39 +133,49 @@ static void safexcel_context_control(struct safexcel_ahash_ctx *ctx,
 		if ((req->digest == CONTEXT_CONTROL_DIGEST_PRECOMPUTED) ||
 		    /* PE HW < 4.4 cannot do HMAC continue, fake using hash */
 		    ((priv->pever < 0x440) &&
-		     (req->processed[1] || 
+		     (req->processed[1] ||
 		      (req->processed[0] != crypto_ahash_blocksize(ahash))))) {
-		      	/* Basic hash continue operation, need digest + cnt */
-			cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE((req->state_sz >> 2) + 1) |
-							CONTEXT_CONTROL_TYPE_HASH_OUT |
-							CONTEXT_CONTROL_DIGEST_PRECOMPUTED;
-			cdesc->control_data.control1 |= CONTEXT_CONTROL_DIGEST_CNT;
-			ctx->base.ctxr->data[req->state_sz >> 2] = cpu_to_le32(count);
+			/* Basic hash continue operation, need digest + cnt */
+			cdesc->control_data.control0 |=
+				CONTEXT_CONTROL_SIZE((req->state_sz >> 2) + 1) |
+				CONTEXT_CONTROL_TYPE_HASH_OUT |
+				CONTEXT_CONTROL_DIGEST_PRECOMPUTED;
+			cdesc->control_data.control1 |=
+				CONTEXT_CONTROL_DIGEST_CNT;
+			ctx->base.ctxr->data[req->state_sz >> 2] =
+				cpu_to_le32(count);
 			req->digest = CONTEXT_CONTROL_DIGEST_PRECOMPUTED;
 		} else { /* HMAC */
 			/* Need outer digest for HMAC finalization */
 			memcpy(ctx->base.ctxr->data + (req->state_sz >> 2),
-	       		       ctx->opad, req->state_sz);
+			       ctx->opad, req->state_sz);
 
-			if (req->processed[1] || (req->processed[0] != crypto_ahash_blocksize(ahash))) {
-				/* HMAC continue - PE HW 4.4 and above can do this */
-				cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE((req->state_sz >> 1) + 1) |
-								CONTEXT_CONTROL_TYPE_HASH_OUT |
-								CONTEXT_CONTROL_DIGEST_HMAC;
-				cdesc->control_data.control1 |= CONTEXT_CONTROL_DIGEST_CNT;
-				ctx->base.ctxr->data[req->state_sz >> 1] = cpu_to_le32(count);
+			if (req->processed[1] ||
+			    (req->processed[0] !=
+			     crypto_ahash_blocksize(ahash))) {
+				/* HMAC continue - PE HW >= 4.4 can do this */
+				cdesc->control_data.control0 |=
+					CONTEXT_CONTROL_SIZE((req->state_sz >> 1) + 1) |
+					CONTEXT_CONTROL_TYPE_HASH_OUT |
+					CONTEXT_CONTROL_DIGEST_HMAC;
+				cdesc->control_data.control1 |=
+					CONTEXT_CONTROL_DIGEST_CNT;
+				ctx->base.ctxr->data[req->state_sz >> 1] =
+					cpu_to_le32(count);
 			} else {
 				/* Single pass HMAC - no digest count */
-				cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE(req->state_sz >> 1) |
-								CONTEXT_CONTROL_TYPE_HASH_OUT |
-								CONTEXT_CONTROL_DIGEST_HMAC;
-			}	
+				cdesc->control_data.control0 |=
+					CONTEXT_CONTROL_SIZE(req->state_sz >> 1) |
+					CONTEXT_CONTROL_TYPE_HASH_OUT |
+					CONTEXT_CONTROL_DIGEST_HMAC;
+			}
 		}
 	} else { /* Hash continuation, do not finish yet */
-		cdesc->control_data.control0 |= CONTEXT_CONTROL_SIZE(req->state_sz >> 2) |
-						CONTEXT_CONTROL_DIGEST_PRECOMPUTED |
-						CONTEXT_CONTROL_TYPE_HASH_OUT |
-						CONTEXT_CONTROL_NO_FINISH_HASH;
+		cdesc->control_data.control0 |=
+			CONTEXT_CONTROL_SIZE(req->state_sz >> 2) |
+			CONTEXT_CONTROL_DIGEST_PRECOMPUTED |
+			CONTEXT_CONTROL_TYPE_HASH_OUT |
+			CONTEXT_CONTROL_NO_FINISH_HASH;
 	}
 }
 
@@ -216,14 +228,15 @@ static int safexcel_handle_req_result(struct safexcel_crypto_priv *priv,
 		sreq->cache_dma = 0;
 	}
 
-	if (sreq->finish) {	
-		if (sreq->hmac && (sreq->digest != CONTEXT_CONTROL_DIGEST_HMAC)) {
+	if (sreq->finish) {
+		if (sreq->hmac &&
+		    (sreq->digest != CONTEXT_CONTROL_DIGEST_HMAC)) {
 			/* Faking HMAC using hash - need to do outer hash */
 			memcpy(sreq->cache, sreq->state,
 			       crypto_ahash_digestsize(ahash));
-			
+
 			memcpy(sreq->state, ctx->opad, sreq->state_sz);
-			
+
 			sreq->len[0] = crypto_ahash_blocksize(ahash) +
 				       crypto_ahash_digestsize(ahash);
 			sreq->len[1] = 0;
@@ -232,15 +245,15 @@ static int safexcel_handle_req_result(struct safexcel_crypto_priv *priv,
 			sreq->hmac = 0;
 
 			ctx->base.needs_inv = true;
-			areq->nbytes = 0;			
+			areq->nbytes = 0;
 			safexcel_ahash_enqueue(areq);
 
 			*should_complete = false; /* Not done yet */
 			return 1;
-		} else {
-			memcpy(areq->result, sreq->state,
-			       crypto_ahash_digestsize(ahash));
 		}
+
+		memcpy(areq->result, sreq->state,
+		crypto_ahash_digestsize(ahash));
 	}
 
 	cache_len = safexcel_queued_len(sreq);
@@ -325,7 +338,8 @@ static int safexcel_ahash_send_req(struct crypto_async_request *async, int ring,
 	/* Now handle the current ahash request buffer(s) */
 	if (areq->nbytes) {
 		req->nents = dma_map_sg(priv->dev, areq->src,
-					sg_nents_for_len(areq->src, areq->nbytes),
+					sg_nents_for_len(areq->src,
+							 areq->nbytes),
 					DMA_TO_DEVICE);
 		if (!req->nents) {
 			ret = -ENOMEM;
@@ -342,7 +356,8 @@ static int safexcel_ahash_send_req(struct crypto_async_request *async, int ring,
 			cdesc = safexcel_add_cdesc(priv, ring, !n_cdesc,
 						   !(queued - sglen),
 						   sg_dma_address(sg),
-						   sglen, len, ctx->base.ctxr_dma);
+						   sglen, len,
+						   ctx->base.ctxr_dma);
 			if (IS_ERR(cdesc)) {
 				ret = PTR_ERR(cdesc);
 				goto unmap_sg;
@@ -357,7 +372,7 @@ static int safexcel_ahash_send_req(struct crypto_async_request *async, int ring,
 				break;
 		}
 	}
-	
+
 send_command:
 	/* Setup the context options */
 	safexcel_context_control(ctx, req, ahash, first_cdesc);
@@ -469,8 +484,6 @@ static int safexcel_handle_result(struct safexcel_crypto_priv *priv, int ring,
 	struct ahash_request *areq = ahash_request_cast(async);
 	struct safexcel_ahash_req *req = ahash_request_ctx(areq);
 	int err;
-
-	BUG_ON(!(priv->feat_flags & EIP197_NEED_INV) && req->needs_inv);
 
 	if (req->needs_inv) {
 		req->needs_inv = false;
@@ -602,20 +615,21 @@ static int safexcel_ahash_enqueue(struct ahash_request *areq)
 
 	if (ctx->base.ctxr) {
 		if ((priv->feat_flags & EIP197_NEED_INV) &&
-		    (!ctx->base.needs_inv) && 
+		    (!ctx->base.needs_inv) &&
 		     /* only invalidate for continue or HMAC cases */
 		    (req->processed[0] || req->processed[1]) &&
 		    (/* invalidate for basic hash continuation finish */
-		     (req->finish && (req->digest == CONTEXT_CONTROL_DIGEST_PRECOMPUTED)) ||
+		     (req->finish &&
+		      (req->digest == CONTEXT_CONTROL_DIGEST_PRECOMPUTED)) ||
 		     /* invalidate if (i)digest changed */
 		     memcmp(ctx->base.ctxr->data, req->state, req->state_sz) ||
 		     /* invalidate for HMAC continuation finish */
-		     (req->finish && (req->processed[1] || 
+		     (req->finish && (req->processed[1] ||
 		      (req->processed[0] != crypto_ahash_blocksize(ahash)))) ||
 		     /* invalidate for HMAC finish with odigest changed */
 		     (req->finish &&
-		      memcmp(ctx->base.ctxr->data + (req->state_sz>>2), 
-		      	     ctx->opad, req->state_sz))))
+		      memcmp(ctx->base.ctxr->data + (req->state_sz>>2),
+			     ctx->opad, req->state_sz))))
 			/* We're still setting needs_inv here, even though it is
 			 * cleared right away, because the needs_inv flag can be
 			 * set in other functions and we want to keep the same
@@ -676,14 +690,14 @@ static int safexcel_ahash_final(struct ahash_request *areq)
 
 	req->finish = true;
 
-
 	if (req->hmac) {
 		/* Finalize HMAC */
-		req->digest = CONTEXT_CONTROL_DIGEST_HMAC;		
-		
-	/* If we have an overall 0 length hash request:
-	   The HW cannot do 0 length hash/HMAC! For hash, we provide
-	   the correct result here.
+		req->digest = CONTEXT_CONTROL_DIGEST_HMAC;
+
+	/*
+	 * If we have an overall 0 length hash request:
+	 * The HW cannot do 0 length hash/HMAC! For hash, we provide
+	 * the correct result here.
 	 */
 	} else if (!req->len[0] && !req->len[1] && !areq->nbytes) {
 		if (ctx->alg == CONTEXT_CONTROL_CRYPTO_ALG_MD5)
@@ -864,8 +878,8 @@ static int safexcel_hmac_sha1_init(struct ahash_request *areq)
 
 	/* Start from ipad precompute */
 	memcpy(req->state, ctx->ipad, SHA1_DIGEST_SIZE);
-        /* Already processed the key^ipad part now! */
-	req->len[0] 	  = SHA1_BLOCK_SIZE;
+	/* Already processed the key^ipad part now! */
+	req->len[0]	  = SHA1_BLOCK_SIZE;
 	req->processed[0] = SHA1_BLOCK_SIZE;
 
 	ctx->alg = CONTEXT_CONTROL_CRYPTO_ALG_SHA1;
@@ -1017,13 +1031,13 @@ int safexcel_hmac_setkey(const char *alg, const u8 *key, unsigned int keylen,
 	if (ret)
 		goto free_ipad;
 
-        
+
 	ret = safexcel_hmac_init_iv(areq, blocksize, ipad, istate);
 	if (ret)
 		goto free_ipad;
 
 	ret = safexcel_hmac_init_iv(areq, blocksize, opad, ostate);
-	
+
 free_ipad:
 	kfree(ipad);
 free_request:
@@ -1220,8 +1234,8 @@ static int safexcel_hmac_sha224_init(struct ahash_request *areq)
 
 	/* Start from ipad precompute */
 	memcpy(req->state, ctx->ipad, SHA256_DIGEST_SIZE);
-        /* Already processed the key^ipad part now! */
-	req->len[0] 	  = SHA256_BLOCK_SIZE;
+	/* Already processed the key^ipad part now! */
+	req->len[0]	  = SHA256_BLOCK_SIZE;
 	req->processed[0] = SHA256_BLOCK_SIZE;
 
 	ctx->alg = CONTEXT_CONTROL_CRYPTO_ALG_SHA224;
@@ -1289,8 +1303,8 @@ static int safexcel_hmac_sha256_init(struct ahash_request *areq)
 
 	/* Start from ipad precompute */
 	memcpy(req->state, ctx->ipad, SHA256_DIGEST_SIZE);
-        /* Already processed the key^ipad part now! */
-	req->len[0] 	  = SHA256_BLOCK_SIZE;
+	/* Already processed the key^ipad part now! */
+	req->len[0]	  = SHA256_BLOCK_SIZE;
 	req->processed[0] = SHA256_BLOCK_SIZE;
 
 	ctx->alg = CONTEXT_CONTROL_CRYPTO_ALG_SHA256;
@@ -1466,8 +1480,8 @@ static int safexcel_hmac_sha512_init(struct ahash_request *areq)
 
 	/* Start from ipad precompute */
 	memcpy(req->state, ctx->ipad, SHA512_DIGEST_SIZE);
-        /* Already processed the key^ipad part now! */
-	req->len[0] 	  = SHA512_BLOCK_SIZE;
+	/* Already processed the key^ipad part now! */
+	req->len[0]	  = SHA512_BLOCK_SIZE;
 	req->processed[0] = SHA512_BLOCK_SIZE;
 
 	ctx->alg = CONTEXT_CONTROL_CRYPTO_ALG_SHA512;
@@ -1535,8 +1549,8 @@ static int safexcel_hmac_sha384_init(struct ahash_request *areq)
 
 	/* Start from ipad precompute */
 	memcpy(req->state, ctx->ipad, SHA512_DIGEST_SIZE);
-        /* Already processed the key^ipad part now! */
-	req->len[0] 	  = SHA512_BLOCK_SIZE;
+	/* Already processed the key^ipad part now! */
+	req->len[0]	  = SHA512_BLOCK_SIZE;
 	req->processed[0] = SHA512_BLOCK_SIZE;
 
 	ctx->alg = CONTEXT_CONTROL_CRYPTO_ALG_SHA384;
@@ -1651,8 +1665,8 @@ static int safexcel_hmac_md5_init(struct ahash_request *areq)
 
 	/* Start from ipad precompute */
 	memcpy(req->state, ctx->ipad, MD5_DIGEST_SIZE);
-        /* Already processed the key^ipad part now! */
-	req->len[0] 	  = MD5_HMAC_BLOCK_SIZE;
+	/* Already processed the key^ipad part now! */
+	req->len[0]	  = MD5_HMAC_BLOCK_SIZE;
 	req->processed[0] = MD5_HMAC_BLOCK_SIZE;
 
 	ctx->alg = CONTEXT_CONTROL_CRYPTO_ALG_MD5;

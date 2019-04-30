@@ -361,19 +361,20 @@ static int safexcel_handle_req_result(struct safexcel_crypto_priv *priv, int rin
 		dma_unmap_sg(priv->dev, src, sreq->nr_src, DMA_TO_DEVICE);
 		dma_unmap_sg(priv->dev, dst, sreq->nr_dst, DMA_FROM_DEVICE);
 	}
-						 
-	/* 
+
+	/*
 	 * Update IV in req from last crypto output word for CBC modes
 	 */
 	if ((!ctx->aead) && (ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC)) {
 		if (sreq->direction == SAFEXCEL_ENCRYPT) {
 			/* For encrypt take the last output word */
-			sg_pcopy_to_buffer(dst, sreq->nr_dst, areq->iv, 
-					   crypto_skcipher_ivsize(skcipher), 
-					   (cryptlen - crypto_skcipher_ivsize(skcipher)));
+			sg_pcopy_to_buffer(dst, sreq->nr_dst, areq->iv,
+					   crypto_skcipher_ivsize(skcipher),
+					   (cryptlen -
+					    crypto_skcipher_ivsize(skcipher)));
 		} else {
 			/* For decrypt we previously saved the IV */
-			memcpy(areq->iv, sreq->input_iv, 
+			memcpy(areq->iv, sreq->input_iv,
 			       crypto_skcipher_ivsize(skcipher));
 		}
 	}
@@ -406,7 +407,7 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 	bool first = true;
 
 	if (ctx->aead) {
-		/* 
+		/*
 		 * AEAD has auth tag appended to output for encrypt and
 		 * removed from the output for decrypt!
 		 */
@@ -415,8 +416,8 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 		else
 			totlen_dst += digestsize;
 	}
-		
-	/* 
+
+	/*
 	 * Remember actual input length, source buffer length may be
 	 * updated in case of inline operation below.
 	 */
@@ -427,7 +428,7 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 		totlen_src = max(totlen_src, totlen_dst);
 		sreq->nr_src = sg_nents_for_len(src, totlen_src);
 		if (unlikely(sreq->nr_src <= 0)) {
-			dev_err(priv->dev, "In-place buffer not large enough (need %d bytes)!", 
+			dev_err(priv->dev, "In-place buffer not large enough (need %d bytes)!",
 				totlen_src);
 			return -EINVAL;
 		}
@@ -452,7 +453,7 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 				     DMA_TO_DEVICE);
 			return -EINVAL;
 		}
-		
+
 		sreq->nr_dst = dma_map_sg(priv->dev, dst, sreq->nr_dst,
 					  DMA_FROM_DEVICE);
 	}
@@ -466,14 +467,15 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 		       ctx->opad, ctx->state_sz);
 	} else if ((ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC)  &&
 		   (sreq->direction == SAFEXCEL_DECRYPT)) {
-		/* 
-	 	* Save IV from last crypto input word for CBC modes in decrypt
+		/*
+		 * Save IV from last crypto input word for CBC modes in decrypt
 		 * direction. Need to do this first in case of inplace operation
 		 * as it will be overwritten.
 		 */
-		sg_pcopy_to_buffer(src, sreq->nr_src, sreq->input_iv, 
-				   crypto_skcipher_ivsize(skcipher), 
-				   (totlen_src - crypto_skcipher_ivsize(skcipher)));
+		sg_pcopy_to_buffer(src, sreq->nr_src, sreq->input_iv,
+				   crypto_skcipher_ivsize(skcipher),
+				   (totlen_src -
+				    crypto_skcipher_ivsize(skcipher)));
 	}
 
 	/* command descriptors */
@@ -516,14 +518,14 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 	for_each_sg(dst, sg, sreq->nr_dst, i) {
 		bool last = (i == sreq->nr_dst - 1);
 		u32 len = sg_dma_len(sg);
-		
+
 		/* only allow the part of the buffer we know we need */
 		if (len > totlen_dst)
-			len = totlen_dst; 
+			len = totlen_dst;
 		if (unlikely(!len))
 			break;
 		totlen_dst -= len;
-		
+
 		/* skip over AAD space in buffer - not written */
 		if (assoclen) {
 			if (assoclen >= len) {
@@ -531,7 +533,8 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 				continue;
 			}
 			rdesc = safexcel_add_rdesc(priv, ring, first, last,
-						   sg_dma_address(sg) + assoclen,
+						   sg_dma_address(sg) +
+						   assoclen,
 						   len - assoclen);
 			assoclen = 0;
 		} else {
@@ -550,9 +553,9 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 		}
 		n_rdesc++;
 	}
-	
+
 	if (first) {
-		/* 
+		/*
 		 * Special case: AEAD decrypt with only AAD data.
 		 * In this case there is NO output data from the engine,
 		 * but the engine still needs a result descriptor!
@@ -607,10 +610,10 @@ static int safexcel_handle_inv_result(struct safexcel_crypto_priv *priv,
 		*ret = PTR_ERR(rdesc);
 		*should_complete = false;
 		return 0;
-	} else {
-		*ret = safexcel_rdesc_check_errors(priv, rdesc);
 	}
-	
+
+	*ret = safexcel_rdesc_check_errors(priv, rdesc);
+
 	safexcel_complete(priv, ring);
 
 	/* Move the RDR read pointer after all desc have been fully processed */
@@ -657,7 +660,7 @@ static int safexcel_skcipher_handle_result(struct safexcel_crypto_priv *priv,
 						 should_complete, ret);
 	} else {
 		err = safexcel_handle_req_result(priv, ring, async, req->src,
-						 req->dst, req->cryptlen, 
+						 req->dst, req->cryptlen,
 						 sreq, should_complete, ret);
 	}
 
@@ -707,12 +710,8 @@ static int safexcel_skcipher_send(struct crypto_async_request *async, int ring,
 				  int *commands, int *results)
 {
 	struct skcipher_request *req = skcipher_request_cast(async);
-	struct safexcel_cipher_ctx *ctx = crypto_tfm_ctx(req->base.tfm);
 	struct safexcel_cipher_req *sreq = skcipher_request_ctx(req);
-	struct safexcel_crypto_priv *priv = ctx->priv;
 	int ret;
-
-	BUG_ON(!(priv->feat_flags & EIP197_NEED_INV) && sreq->needs_inv);
 
 	if (sreq->needs_inv)
 		ret = safexcel_cipher_send_inv(async, ring, commands, results);
@@ -728,12 +727,8 @@ static int safexcel_aead_send(struct crypto_async_request *async, int ring,
 {
 	struct aead_request *req = aead_request_cast(async);
 	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
-	struct safexcel_cipher_ctx *ctx = crypto_tfm_ctx(req->base.tfm);
 	struct safexcel_cipher_req *sreq = aead_request_ctx(req);
-	struct safexcel_crypto_priv *priv = ctx->priv;
 	int ret;
-
-	BUG_ON(!(priv->feat_flags & EIP197_NEED_INV) && sreq->needs_inv);
 
 	if (sreq->needs_inv)
 		ret = safexcel_cipher_send_inv(async, ring, commands, results);

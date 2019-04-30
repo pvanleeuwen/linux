@@ -30,10 +30,10 @@
 static u32 nofw; // disable FW load
 module_param(nofw, uint, 0644);
 MODULE_PARM_DESC(nofw, "Set to 1 to force skipping of firmware download");
-static u32 max_rings= 255;
+static u32 max_rings = 255;
 module_param(max_rings, uint, 0644);
 MODULE_PARM_DESC(max_rings, "Maximum number of rings to use, default=all. Use more rings to spread the load over multiple CPUs");
-static u32 max_pipes=255;
+static u32 max_pipes = 255;
 module_param(max_pipes, uint, 0644);
 MODULE_PARM_DESC(max_pipes, "Maximum number of pipes to use, default=all.");
 static u32 ring_entries; // default=0=autoconfig
@@ -60,26 +60,27 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 	int maxbanks, actbank, curbank, lrgrecsz;
 	u32 addrhi, addrlo, addrmid, dsize, asize;
 
-	/* 
+	/*
 	 * Map all interfaces/rings to register index 0
 	 * so they can share contexts. Without this, the EIP197 will
-	 * assume each interface/ring to be in its own memory domain 
+	 * assume each interface/ring to be in its own memory domain
 	 * i.e. have its own subset of UNIQUE memory addresses.
 	 * Which would cause records with the SAME memory address to
 	 * use DIFFERENT cache buffers, causing both poor cache utilization
 	 * AND serious coherence/invalidation issues.
 	 */
-	for (i=0; i < 4; i++)	
+	for (i = 0; i < 4; i++)
 		writel(0, priv->base + EIP197_FLUE_IFC_LUT(i));
-		
-	/* 
-	 * Initialize other virtualization regs for cache 
+
+	/*
+	 * Initialize other virtualization regs for cache
 	 * These may not be in their reset state ...
 	 */
-	for (i=0; i < priv->config.rings; i++) {
+	for (i = 0; i < priv->config.rings; i++) {
 		writel(0, priv->base + EIP197_FLUE_CACHEBASE_LO(i));
 		writel(0, priv->base + EIP197_FLUE_CACHEBASE_HI(i));
-		writel(EIP197_FLUE_CONFIG_MAGIC, priv->base + EIP197_FLUE_CONFIG(i));
+		writel(EIP197_FLUE_CONFIG_MAGIC,
+		       priv->base + EIP197_FLUE_CONFIG(i));
 	}
 	writel(0, priv->base + EIP197_FLUE_OFFSETS);
 	writel(0, priv->base + EIP197_FLUE_ARC4_OFFSET);
@@ -521,7 +522,7 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 	}
 	/* ICE vs OCE FW consistency check if applicable*/
 	if (((ipfwver != opfwver) || (iphwrver != ophwrver) ||
-	     (iphwmmver != ophwmmver)) && 
+	     (iphwmmver != ophwmmver)) &&
 	    (priv->feat_flags & EIP197_OCE) && (numfw == 4)) {
 		dev_info(priv->dev, "ICE vs OCE firmware version mismatch");
 		return false;
@@ -665,21 +666,21 @@ static int eip197_load_firmwares(struct safexcel_crypto_priv *priv)
 	 * prefetch & invalidate. It does not support any FW flows, effectively
 	 * turning the EIP197 into a glorified EIP97
 	 */
-        const u32 ipue_minifw[] =
-		{0x24808200, 0x2D008204, 0x2680E208, 0x2780E20C,
+	const u32 ipue_minifw[] = {
+		 0x24808200, 0x2D008204, 0x2680E208, 0x2780E20C,
 		 0x2200F7FF, 0x38347000, 0x2300F000, 0x15200A80,
 		 0x01699003, 0x60038011, 0x38B57000, 0x0119F04C,
 		 0x01198548, 0x20E64000, 0x20E75000, 0x1E200000,
 		 0x30E11000, 0x103A93FF, 0x60830014, 0x5B8B0000,
 		 0xC0389000, 0x600B0018, 0x2300F000, 0x60800011,
 		 0x90800000, 0x10000000, 0x10000000};
-        const u32 ifpp_minifw[] =
-		{0x21008000, 0x260087FC, 0xF01CE4C0, 0x60830006,
+	const u32 ifpp_minifw[] = {
+		 0x21008000, 0x260087FC, 0xF01CE4C0, 0x60830006,
 		 0x530E0000, 0x90800000, 0x23008004, 0x24808008,
 		 0x2580800C, 0x0D300000, 0x205577FC, 0x30D42000,
 		 0x20DAA7FC, 0x43107000, 0x42220004, 0x00000000,
 		 0x00000000, 0x00000000, 0x00000000, 0x00000000,
- 		 0x00060004, 0x20337004, 0x90800000, 0x10000000,
+		 0x00060004, 0x20337004, 0x90800000, 0x10000000,
 		 0x10000000};
 	const struct firmware *fw[FW_NB];
 	char fw_path[31], *dir = NULL;
@@ -704,10 +705,10 @@ static int eip197_load_firmwares(struct safexcel_crypto_priv *priv)
 	else
 		numfw = 2;
 
-	i = 0;		
+	i = 0;
 	if (nofw)
 		goto release_fw;
-		
+
 	for (; i < numfw; i++) {
 		snprintf(fw_path, 31, "inside-secure/%s/%s", dir, fw_name[i]);
 		ret = firmware_request_nowarn(&fw[i], fw_path, priv->dev);
@@ -779,13 +780,13 @@ download_fw:
 		dev_info(priv->dev, "OPUE FW image is %d words, OFPP FW image is %d words",
 			 opuesz, ofppsz);
 	}
-	
+
 	if (eip197_start_firmware(priv, numfw, ipuesz, ifppsz,
 				  opuesz, ofppsz)) {
 		dev_info(priv->dev, "EIP197 firmware loaded successfully");
 		return 0;
 	}
-	
+
 release_fw:
 	/* Note that this functionality is formally for debugging only ... */
 	if (priv->feat_flags & EIP197_OCE) {
@@ -1223,7 +1224,7 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 			/* disable oversize check to allow for pad stripping */
 			writel(3, EIP197_PE(priv) +
 				  EIP197_PE_EIP96_TOKEN_CTRL2(pe));
-		}		  
+		}
 		if (priv->pever >= 0x420) { // new in this HW version!
 			/* just enable all supported algorithms, part deux */
 			writel(GENMASK(31, 0),
@@ -1505,16 +1506,16 @@ inline int safexcel_rdesc_check_errors(struct safexcel_crypto_priv *priv,
 	struct safexcel_result_desc *result_desc = rdesc;
 	struct result_data_desc *result_data = rdesc + priv->config.res_offset;
 
-	if (likely((!result_desc->descriptor_overflow) && 
-		   (!result_desc->buffer_overflow) && 
+	if (likely((!result_desc->descriptor_overflow) &&
+		   (!result_desc->buffer_overflow) &&
 		   (!result_data->error_code)))
 		return 0;
-		
+
 	if (result_desc->descriptor_overflow)
-		dev_err(priv->dev, "Descriptor overflow detected");		
+		dev_err(priv->dev, "Descriptor overflow detected");
 
 	if (result_desc->buffer_overflow)
-		dev_err(priv->dev, "Buffer overflow detected");		
+		dev_err(priv->dev, "Buffer overflow detected");
 
 	if (result_data->error_code & 0x407f) {
 		/* Fatal error (bits 0-7, 14) */
@@ -1526,7 +1527,7 @@ inline int safexcel_rdesc_check_errors(struct safexcel_crypto_priv *priv,
 		/* Authentication failed */
 		return -EBADMSG;
 	}
-	
+
 	/* All other non-fatal errors */
 	return -EINVAL;
 }
@@ -2243,8 +2244,8 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 	if (priv->algo_flags & ALGO_DES)
 		dev_info(priv->dev, " HW supports DES & 3DES block ciphers%s",
 			 (priv->algo_flags & ALGO_DES_XFB) ?
-			 	", with CFB/OFB support" :
-			 	" (no CFB/OFB)");
+				", with CFB/OFB support" :
+				" (no CFB/OFB)");
 	if (priv->algo_flags && ALGO_AES)
 		dev_info(priv->dev, " HW supports AES block cipher%s%s",
 			 (priv->algo_flags & ALGO_AES_XFB) ?
