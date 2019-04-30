@@ -81,7 +81,7 @@ static char *check[] = {
 	NULL
 };
 
-static u32 block_sizes[] = { 16, 64, 256, 1024, 1472, 8192, 0 };
+static u32 block_sizes[] = { 64, 320, 512, 1440, 2048, 4096, 6144, 8192, 0 };
 static u32 aead_sizes[] = { 16, 64, 256, 512, 1024, 2048, 4096, 8192, 0 };
 
 #define XBUFSIZE 8
@@ -1653,7 +1653,7 @@ static inline int tcrypt_test(const char *alg)
 {
 	int ret;
 
-	pr_debug("testing %s\n", alg);
+	printk("testing %s\n", alg);
 
 	ret = alg_test(alg, alg, 0, 0);
 	/* non-fips algs return -EINVAL in fips mode */
@@ -3000,6 +3000,17 @@ static int do_test(const char *alg, u32 type, u32 mask, int m, u32 num_mb)
 				       speed_template_8_32, num_mb);
 		test_mb_skcipher_speed("ctr(blowfish)", DECRYPT, sec, NULL, 0,
 				       speed_template_8_32, num_mb);
+		break;
+
+	case 698:
+		test_mb_skcipher_speed("ecb(aes)", ENCRYPT, sec, NULL, 0,
+				       speed_template_16_24_32, num_mb);
+		test_mb_skcipher_speed("ecb(aes)", DECRYPT, sec, NULL, 0,
+				       speed_template_16_24_32, num_mb);
+		test_mb_skcipher_speed("cbc(aes)", ENCRYPT, sec, NULL, 0,
+				       speed_template_16_24_32, num_mb);
+		test_mb_skcipher_speed("cbc(aes)", DECRYPT, sec, NULL, 0,
+				       speed_template_16_24_32, num_mb);
 		break;
 
 	case 1000:
