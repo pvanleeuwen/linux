@@ -333,10 +333,6 @@ static const struct testvec_config default_cipher_testvec_configs[] = {
 
 static const struct testvec_config default_hash_testvec_configs[] = {
 	{
-		.name = "digest aligned buffer",
-		.src_divs = { { .proportion_of_total = 10000 } },
-		.finalization_type = FINALIZATION_TYPE_DIGEST,
-	}, {
 		.name = "init+update+final aligned buffer",
 		.src_divs = { { .proportion_of_total = 10000 } },
 		.finalization_type = FINALIZATION_TYPE_FINAL,
@@ -344,6 +340,10 @@ static const struct testvec_config default_hash_testvec_configs[] = {
 		.name = "init+finup aligned buffer",
 		.src_divs = { { .proportion_of_total = 10000 } },
 		.finalization_type = FINALIZATION_TYPE_FINUP,
+	}, {
+		.name = "digest aligned buffer",
+		.src_divs = { { .proportion_of_total = 10000 } },
+		.finalization_type = FINALIZATION_TYPE_DIGEST,
 	}, {
 		.name = "init+update+final misaligned buffer",
 		.src_divs = { { .proportion_of_total = 10000, .offset = 1 } },
@@ -622,24 +622,16 @@ static int verify_correct_output(const struct test_sglist *tsgl,
 		if (prefix_len) {
 			if (prefix_len >= len) {
 				if (expected_prefix) {
-					if (memcmp(expected_prefix, actual_output, len) != 0) {
-						pr_err("Vector AAD mismatch1!");
-						print_hex_dump(KERN_ERR, "exp", DUMP_PREFIX_NONE, 16, 1, expected_prefix, len, true);
-						print_hex_dump(KERN_ERR, "act", DUMP_PREFIX_NONE, 16, 1, actual_output, len, true);
+					if (memcmp(expected_prefix, actual_output, len) != 0)
 						return -EINVAL;
-					}
-					expected_prefix += len;
+G					expected_prefix += len;
 				}
 				prefix_len -= len;
 				continue;
 			} 
 
-			if (expected_prefix && memcmp(expected_prefix, actual_output, prefix_len) != 0) {
-				pr_err("Vector AAD mismatch2!");
-				print_hex_dump(KERN_ERR, "exp", DUMP_PREFIX_NONE, 16, 1, expected_prefix, prefix_len, true);
-				print_hex_dump(KERN_ERR, "act", DUMP_PREFIX_NONE, 16, 1, actual_output, prefix_len, true);
+			if (expected_prefix && memcmp(expected_prefix, actual_output, prefix_len) != 0)
 				return -EINVAL;
-			}
 			
 			offset += prefix_len;
 			len -= prefix_len;
@@ -647,22 +639,16 @@ static int verify_correct_output(const struct test_sglist *tsgl,
 			actual_output = page_address(sg_page(sg)) + offset;
 		}
 		len = min(len, len_to_check);		
-		if (memcmp(expected_output, actual_output, len) != 0) {
-			pr_err("Vector mismatch!");
-			print_hex_dump(KERN_ERR, "exp", DUMP_PREFIX_NONE, 16, 1, expected_output, len, true);
-			print_hex_dump(KERN_ERR, "act", DUMP_PREFIX_NONE, 16, 1, actual_output, len, true);
+		if (memcmp(expected_output, actual_output, len) != 0)
 			return -EINVAL;
-		}
 		if (check_poison &&
 		    !testmgr_is_poison(actual_output + len, TESTMGR_POISON_LEN))
 			return -EOVERFLOW;
 		len_to_check -= len;
 		expected_output += len;
 	}
-	if (len_to_check != 0) {
-		pr_err("Vector length mismatch!");
+	if (len_to_check != 0)
 		return -EINVAL;
-	}	
 	return 0;
 }
 
@@ -679,7 +665,9 @@ static bool is_test_sglist_corrupted(const struct test_sglist *tsgl)
 			return true;
 	}
 	return false;
-}struct cipher_test_sglists {
+}
+
+struct cipher_test_sglists {
 	struct test_sglist src;
 	struct test_sglist dst;
 };
@@ -903,8 +891,6 @@ static int test_hash_vec_cfg(const char *driver,
 	unsigned int pending_len;
 	u8 result[HASH_MAX_DIGESTSIZE + TESTMGR_POISON_LEN];
 	int err;
-	
-	// pr_err("alg: hash: test %s started vector %u, cfg=\"%s\.\n", driver, vec_num, cfg->name);
 
 	/* Set the key, if specified */
 	if (vec->ksize) {
@@ -1201,8 +1187,6 @@ static int test_aead_vec_cfg(const char *driver, int enc,
 		 (cfg->iv_offset_relative_to_alignmask ? alignmask : 0);
 	struct kvec input[2];
 	int err;
-
-	// pr_err("alg: aead: test %s started vector %u, cfg=\"%s\.\n", driver, vec_num, cfg->name);
 
 	/* Set the key */
 	if (vec->wk)
@@ -1546,8 +1530,6 @@ static int test_skcipher_vec_cfg(const char *driver, int enc,
 	struct kvec input;
 	int err;
 
-	// pr_err("alg: skcipher: test %s started vector %u, cfg=\"%s\.\n", driver, vec_num, cfg->name);
-
 	/* Set the key */
 	if (vec->wk)
 		crypto_skcipher_set_flags(tfm, CRYPTO_TFM_REQ_FORBID_WEAK_KEYS);
@@ -1661,8 +1643,8 @@ static int test_skcipher_vec_cfg(const char *driver, int enc,
 		return err;
 	}
 	if (err) {
-		pr_err("alg: skcipher: %s %s test failed (wrong result: %d) on test vector %u, cfg=\"%s\"\n",
-		       driver, op, err, vec_num, cfg->name);
+		pr_err("alg: skcipher: %s %s test failed (wrong result) on test vector %u, cfg=\"%s\"\n",
+		       driver, op, vec_num, cfg->name);
 		return err;
 	}
 
