@@ -86,7 +86,7 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 	writel(0, priv->base + EIP197_FLUE_ARC4_OFFSET);
 
 	/*
-	 *Enable the record cache memory access and
+	 * Enable the record cache memory access and
 	 * probe the bank select width
 	 */
 	val = readl(priv->base + EIP197_CS_RAM_CTRL);
@@ -599,7 +599,7 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 
 	/* Program correct parsing depth threshold into the HW */
 	for (pe = 0; pe < priv->config.pes; pe++) {
-		writel(0xc0de0000 | ipbsize,
+		writel(EIP197_PE_OCE_ADAPT_CTRL_MAGIC | ipbsize,
 		       EIP197_PE(priv) + EIP197_PE_ICE_ADAPT_CTRL(pe));
 	}
 
@@ -1086,7 +1086,8 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 		if (priv->hwver >= 0x280) {
 			/*
 			 * These registers exist since EIP197 HW2.8
-			 * This should be optimal then the (safe) reset values
+			 * This should be more optimal than the (safe) 
+			 * reset values
 			 */
 			writel(EIP197_PIPE_ICE_COHERENCE_MAGIC,
 			       priv->base + EIP197_PIPE_ICE_COHERENCE_CTRL(pe));
@@ -2117,7 +2118,7 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 
 	/*
 	 * We're not done probing yet! We may fall through to here if no HIA was
-	 * found at all/ So, with the endianness presumably correct now and the
+	 * found at all. So, with the endianness presumably correct now and the
 	 * offsets setup, *really* probe for the EIP97/EIP197.
 	 */
 	version = readl(EIP197_GLOBAL(priv) + EIP197_VERSION);
