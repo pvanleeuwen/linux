@@ -624,7 +624,7 @@ static int verify_correct_output(const struct test_sglist *tsgl,
 				if (expected_prefix) {
 					if (memcmp(expected_prefix, actual_output, len) != 0)
 						return -EINVAL;
-G					expected_prefix += len;
+					expected_prefix += len;
 				}
 				prefix_len -= len;
 				continue;
