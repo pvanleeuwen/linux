@@ -61,30 +61,27 @@ static void safexcel_skcipher_token(struct safexcel_cipher_ctx *ctx, u8 *iv,
 				    u32 length)
 {
 	struct safexcel_token *token;
-	unsigned offset = 0;
 
 	if (ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC) {
 		switch (ctx->alg) {
 		case SAFEXCEL_DES:
-			offset = DES_BLOCK_SIZE / sizeof(u32);
 			memcpy(cdesc->control_data.token, iv, DES_BLOCK_SIZE);
 			cdesc->control_data.options |= EIP197_OPTION_2_TOKEN_IV_CMD;
 			break;
 		case SAFEXCEL_3DES:
-			offset = DES3_EDE_BLOCK_SIZE / sizeof(u32);
 			memcpy(cdesc->control_data.token, iv, DES3_EDE_BLOCK_SIZE);
 			cdesc->control_data.options |= EIP197_OPTION_2_TOKEN_IV_CMD;
 			break;
 
 		case SAFEXCEL_AES:
-			offset = AES_BLOCK_SIZE / sizeof(u32);
 			memcpy(cdesc->control_data.token, iv, AES_BLOCK_SIZE);
 			cdesc->control_data.options |= EIP197_OPTION_4_TOKEN_IV_CMD;
 			break;
 		}
 	}
 
-	token = (struct safexcel_token *)(cdesc->control_data.token + offset);
+	token = (struct safexcel_token *)(cdesc->control_data.token +
+					  EIP197_MAX_TOKENS - 1);
 
 	token[0].opcode = EIP197_TOKEN_OPCODE_DIRECTION;
 	token[0].packet_length = length;
@@ -101,33 +98,17 @@ static void safexcel_aead_token(struct safexcel_cipher_ctx *ctx, u8 *iv,
 				u32 cryptlen, u32 assoclen, u32 digestsize)
 {
 	struct safexcel_token *token;
-	unsigned offset = 0;
 
 	if (ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC) {
-		offset = AES_BLOCK_SIZE / sizeof(u32);
 		memcpy(cdesc->control_data.token, iv, AES_BLOCK_SIZE);
 
 		cdesc->control_data.options |= EIP197_OPTION_4_TOKEN_IV_CMD;
 	}
 
-	token = (struct safexcel_token *)(cdesc->control_data.token + offset);
-
-	if (direction == SAFEXCEL_DECRYPT)
-		cryptlen -= digestsize;
-
-	token[0].opcode = EIP197_TOKEN_OPCODE_DIRECTION;
-	token[0].packet_length = assoclen;
-	token[0].instructions = EIP197_TOKEN_INS_TYPE_HASH;
-
-	token[1].opcode = EIP197_TOKEN_OPCODE_DIRECTION;
-	token[1].packet_length = cryptlen;
-	token[1].stat = EIP197_TOKEN_STAT_LAST_HASH;
-	token[1].instructions = EIP197_TOKEN_INS_LAST |
-				EIP197_TOKEN_INS_TYPE_CRYPTO |
-				EIP197_TOKEN_INS_TYPE_HASH |
-				EIP197_TOKEN_INS_TYPE_OUTPUT;
-
 	if (direction == SAFEXCEL_ENCRYPT) {
+		token = (struct safexcel_token *)(cdesc->control_data.token +
+						  EIP197_MAX_TOKENS - 3);
+
 		token[2].opcode = EIP197_TOKEN_OPCODE_INSERT;
 		token[2].packet_length = digestsize;
 		token[2].stat = EIP197_TOKEN_STAT_LAST_HASH |
@@ -135,6 +116,11 @@ static void safexcel_aead_token(struct safexcel_cipher_ctx *ctx, u8 *iv,
 		token[2].instructions = EIP197_TOKEN_INS_TYPE_OUTPUT |
 					EIP197_TOKEN_INS_INSERT_HASH_DIGEST;
 	} else {
+		cryptlen -= digestsize;
+
+		token = (struct safexcel_token *)(cdesc->control_data.token +
+						  EIP197_MAX_TOKENS - 4);
+
 		token[2].opcode = EIP197_TOKEN_OPCODE_RETRIEVE;
 		token[2].packet_length = digestsize;
 		token[2].stat = EIP197_TOKEN_STAT_LAST_HASH |
@@ -148,6 +134,19 @@ static void safexcel_aead_token(struct safexcel_cipher_ctx *ctx, u8 *iv,
 				EIP197_TOKEN_STAT_LAST_PACKET;
 		token[3].instructions = EIP197_TOKEN_INS_TYPE_OUTPUT;
 	}
+
+	token[0].opcode = EIP197_TOKEN_OPCODE_DIRECTION;
+	token[0].packet_length = assoclen;
+	token[0].instructions = EIP197_TOKEN_INS_TYPE_HASH;
+
+	token[1].opcode = EIP197_TOKEN_OPCODE_DIRECTION;
+	token[1].packet_length = cryptlen;
+	token[1].stat = EIP197_TOKEN_STAT_LAST_HASH;
+	token[1].instructions = EIP197_TOKEN_INS_LAST |
+				EIP197_TOKEN_INS_TYPE_CRYPTO |
+				EIP197_TOKEN_INS_TYPE_HASH |
+				EIP197_TOKEN_INS_TYPE_OUTPUT;
+
 }
 
 static int safexcel_skcipher_aes_setkey(struct crypto_skcipher *ctfm,
@@ -396,6 +395,7 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 	struct safexcel_cipher_ctx *ctx = crypto_tfm_ctx(base->tfm);
 	struct safexcel_crypto_priv *priv = ctx->priv;
 	struct safexcel_command_desc *cdesc;
+	struct safexcel_command_desc *first_cdesc;
 	struct safexcel_result_desc *rdesc, *first_rdesc = NULL;
 	struct scatterlist *sg;
 	unsigned int totlen;
@@ -496,6 +496,7 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 		n_cdesc++;
 
 		if (n_cdesc == 1) {
+			first_cdesc = cdesc;
 			safexcel_context_control(ctx, base, sreq, cdesc);
 			if (ctx->aead)
 				safexcel_aead_token(ctx, iv, cdesc,
@@ -609,7 +610,7 @@ static int safexcel_handle_inv_result(struct safexcel_crypto_priv *priv,
 	} else {
 		*ret = safexcel_rdesc_check_errors(priv, rdesc);
 	}
-
+	
 	safexcel_complete(priv, ring);
 
 	/* Move the RDR read pointer after all desc have been fully processed */

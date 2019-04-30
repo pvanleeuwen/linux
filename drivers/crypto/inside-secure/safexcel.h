@@ -219,6 +219,12 @@
 #define EIP197_TRC_ECCADMINSTAT			0xf0838
 #define EIP197_TRC_ECCDATASTAT			0xf083c
 #define EIP197_TRC_ECCDATA			0xf0840
+#define EIP197_FLUE_CACHEBASE_LO(n)		(0xf6000 + (32 * (n)))
+#define EIP197_FLUE_CACHEBASE_HI(n)		(0xf6004 + (32 * (n)))
+#define EIP197_FLUE_CONFIG(n)			(0xf6010 + (32 * (n)))
+#define EIP197_FLUE_OFFSETS			0xf6808
+#define EIP197_FLUE_ARC4_OFFSET			0xf680c
+
 #define EIP197_FLUE_IFC_LUT(n)			(0xf6820 + (4 * (n)))
 #define EIP197_DRBG_INPUT_OUTPUT(n)		(0xf7000 + (4 * (n)))
 #define EIP197_DRBG_STATUS			0xf7010
@@ -239,6 +245,7 @@
 #define EIP197_CS_OPTIONS			0xf7ff8
 #define EIP197_CS_VERSION			0xf7ffc
 
+#define EIP197_FLUE_CONFIG_MAGIC		0xc7000004
 #define EIP197_PIPE_ICE_COHERENCE_MAGIC		0x7d0a3820
 #define EIP197_PIPE_OCE_COHERENCE_MAGIC		0x59000000
 #define EIP197_PE_EIP96_TOKEN_CTRL_MAGIC	0x00430000
@@ -585,7 +592,7 @@ struct safexcel_token {
 static inline void eip197_noop_token(struct safexcel_token *token)
 {
 	token->opcode = EIP197_TOKEN_OPCODE_NOOP;
-	token->packet_length = BIT(2);
+	token->packet_length = 4;
 }
 
 /* Instructions */

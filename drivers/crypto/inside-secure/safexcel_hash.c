@@ -60,7 +60,8 @@ static void safexcel_hash_token(struct safexcel_command_desc *cdesc,
 				u32 input_length, u32 result_length)
 {
 	struct safexcel_token *token =
-		(struct safexcel_token *)cdesc->control_data.token;
+		(struct safexcel_token *)(cdesc->control_data.token +
+					  EIP197_MAX_TOKENS - 2);
 
 	token[0].opcode = EIP197_TOKEN_OPCODE_DIRECTION;
 	token[0].packet_length = input_length;
@@ -112,7 +113,7 @@ static void safexcel_context_control(struct safexcel_ahash_ctx *ctx,
 		    req->processed[1] ||
 		    (req->processed[0] != crypto_ahash_blocksize(ahash))) {
 			count = req->processed[0] / EIP197_COUNTER_BLOCK_SIZE;
-			count += ((0xffffffff / EIP197_COUNTER_BLOCK_SIZE) *
+			count += ((0x100000000ULL / EIP197_COUNTER_BLOCK_SIZE) *
 				  req->processed[1]);
 	
 			/* This is a hardware limitation, as the

@@ -71,6 +71,18 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 	 */
 	for (i=0; i < 4; i++)	
 		writel(0, priv->base + EIP197_FLUE_IFC_LUT(i));
+		
+	/* 
+	 * Initialize other virtualization regs for cache 
+	 * These may not be in their reset state ...
+	 */
+	for (i=0; i < priv->config.rings; i++) {
+		writel(0, priv->base + EIP197_FLUE_CACHEBASE_LO(i));
+		writel(0, priv->base + EIP197_FLUE_CACHEBASE_HI(i));
+		writel(EIP197_FLUE_CONFIG_MAGIC, priv->base + EIP197_FLUE_CONFIG(i));
+	}
+	writel(0, priv->base + EIP197_FLUE_OFFSETS);
+	writel(0, priv->base + EIP197_FLUE_ARC4_OFFSET);
 
 	/*
 	 *Enable the record cache memory access and
@@ -408,30 +420,34 @@ static bool eip197_start_firmware(struct safexcel_crypto_priv *priv, int numfw,
 	for (pe = 0; pe < priv->config.pes; pe++) {
 		if ((numfw == 4) && (priv->feat_flags & EIP197_OCE)) {
 			/* Start OFPP microengines */
-			val = ((ofppsz - 1) & 0x7ff0) << 16;
 			if (ofppsz)
-				val |= BIT(3); /* Run FW init */
+				val = (((ofppsz - 1) & 0x7ff0) << 16) | BIT(3);
+			else
+				val = 0;
 			writel(val,
 			       EIP197_PE(priv) + EIP197_PE_OCE_FPP_CTRL(pe));
 
 			/* Start OPUE microengines */
-			val = ((opuesz - 1) & 0x7ff0) << 16;
 			if (opuesz)
-				val |= BIT(3); /* Run FW init */
+				val = (((opuesz - 1) & 0x7ff0) << 16) | BIT(3);
+			else
+				val = 0;
 			writel(val,
 			       EIP197_PE(priv) + EIP197_PE_OCE_PUE_CTRL(pe));
 		}
 
 		/* Start IFPP microengines */
-		val = ((ifppsz - 1) & 0x7ff0) << 16;
 		if (ifppsz)
-			val |= BIT(3); /* Run FW init */
+			val = (((ifppsz - 1) & 0x7ff0) << 16) | BIT(3);
+		else
+			val = 0;
 		writel(val, EIP197_PE(priv) + EIP197_PE_ICE_FPP_CTRL(pe));
 
 		/* Start IPUE microengines */
-		val = ((ipuesz - 1) & 0x7ff0) << 16;
 		if (ipuesz)
-			val |= BIT(3); /* Run FW init */
+			val = ((ipuesz - 1) & 0x7ff0) << 16 | BIT(3);
+		else
+			val = 0;
 		writel(val, EIP197_PE(priv) + EIP197_PE_ICE_PUE_CTRL(pe));
 	}
 
@@ -649,22 +665,22 @@ static int eip197_load_firmwares(struct safexcel_crypto_priv *priv)
 	 * prefetch & invalidate. It does not support any FW flows, effectively
 	 * turning the EIP197 into a glorified EIP97
 	 */
-	const u32 ipue_minifw[] = {
-		0x24808200, 0x2D008204, 0x2680E208, 0x2780E20C,
-		0x2200F7FF, 0x38347000, 0x2300F000, 0x15200A80,
-		0x01699003, 0x60038011, 0x38B57000, 0x0119F04C,
-		0x01198548, 0x20E64000, 0x20E75000, 0x1E200000,
-		0x30E11000, 0x103A93FF, 0x60830014, 0x5B8B0000,
-		0xC0389000, 0x600B0018, 0x2300F000, 0x60800011,
-		0x90800000, 0x10000000, 0x10000000};
-	const u32 ifpp_minifw[] = {
-		0x21008000, 0x260087FC, 0xF01CE4C0, 0x60830006,
-		0x530E0000, 0x90800000, 0x23008004, 0x24808008,
-		0x2580800C, 0x0D300000, 0x205577FC, 0x30D42000,
-		0x20DAA7FC, 0x43107000, 0x42220004, 0x00000000,
-		0x00000000, 0x00000000, 0x00000000, 0x00000000,
-		0x00060004, 0x20337004, 0x90800000, 0x10000000,
-		0x10000000};
+        const u32 ipue_minifw[] =
+		{0x24808200, 0x2D008204, 0x2680E208, 0x2780E20C,
+		 0x2200F7FF, 0x38347000, 0x2300F000, 0x15200A80,
+		 0x01699003, 0x60038011, 0x38B57000, 0x0119F04C,
+		 0x01198548, 0x20E64000, 0x20E75000, 0x1E200000,
+		 0x30E11000, 0x103A93FF, 0x60830014, 0x5B8B0000,
+		 0xC0389000, 0x600B0018, 0x2300F000, 0x60800011,
+		 0x90800000, 0x10000000, 0x10000000};
+        const u32 ifpp_minifw[] =
+		{0x21008000, 0x260087FC, 0xF01CE4C0, 0x60830006,
+		 0x530E0000, 0x90800000, 0x23008004, 0x24808008,
+		 0x2580800C, 0x0D300000, 0x205577FC, 0x30D42000,
+		 0x20DAA7FC, 0x43107000, 0x42220004, 0x00000000,
+		 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+ 		 0x00060004, 0x20337004, 0x90800000, 0x10000000,
+		 0x10000000};
 	const struct firmware *fw[FW_NB];
 	char fw_path[31], *dir = NULL;
 	int i, j, ret = 0, pe, numfw;
@@ -763,7 +779,7 @@ download_fw:
 		dev_info(priv->dev, "OPUE FW image is %d words, OFPP FW image is %d words",
 			 opuesz, ofppsz);
 	}
-
+	
 	if (eip197_start_firmware(priv, numfw, ipuesz, ifppsz,
 				  opuesz, ofppsz)) {
 		dev_info(priv->dev, "EIP197 firmware loaded successfully");
@@ -806,11 +822,10 @@ release_fw:
 		writel(ifpp_minifw[i],
 		       priv->base + EIP197_CLASSIFICATION_RAMS + (i<<2));
 
-	for (pe = 0; pe < priv->config.pes; pe++) {
+	for (pe = 0; pe < priv->config.pes; pe++)
 		/* Enable access to all IPUE program memories */
 		writel(EIP197_PE_ICE_RAM_CTRL_PUE_PROG_EN,
 		       EIP197_PE(priv) + EIP197_PE_ICE_RAM_CTRL(pe));
-	}
 
 	for (i = 0; i < sizeof(ipue_minifw)>>2; i++)
 		writel(ipue_minifw[i],
