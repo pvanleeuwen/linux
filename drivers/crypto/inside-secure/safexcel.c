@@ -1518,13 +1518,16 @@ inline int safexcel_rdesc_check_errors(struct safexcel_crypto_priv *priv,
 	if (result_desc->buffer_overflow)
 		dev_err(priv->dev, "Buffer overflow detected");
 
-	if (result_data->error_code & 0x407f) {
+	if (result_data->error_code & 0x4067) {
 		/* Fatal error (bits 0-7, 14) */
 		dev_err(priv->dev,
 			"cipher: result: result descriptor error (%x)",
 			result_data->error_code);
 		return -EIO;
-	} else if (result_data->error_code == BIT(9)) {
+	} else if (result_data->error_code & (BIT(4) | BIT(3) | BIT(7))) {
+		/* Block size and input errors - something wrong with the input! */
+		return -EINVAL;
+	} else if (result_data->error_code & BIT(9)) {
 		/* Authentication failed */
 		return -EBADMSG;
 	}
