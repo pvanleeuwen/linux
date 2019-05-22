@@ -96,12 +96,14 @@ static void safexcel_context_control(struct safexcel_ahash_ctx *ctx,
 		if (req->finish) {
 			cdesc->control_data.control0 |=
 				CONTEXT_CONTROL_TYPE_HASH_OUT |
-				CONTEXT_CONTROL_RESTART_HASH;
+				CONTEXT_CONTROL_RESTART_HASH  |
+				CONTEXT_CONTROL_SIZE(1); // ensure its not 0!
 		} else {
 			cdesc->control_data.control0 |=
-				CONTEXT_CONTROL_TYPE_HASH_OUT |
-				CONTEXT_CONTROL_RESTART_HASH  |
-				CONTEXT_CONTROL_NO_FINISH_HASH;
+				CONTEXT_CONTROL_TYPE_HASH_OUT  |
+				CONTEXT_CONTROL_RESTART_HASH   |
+				CONTEXT_CONTROL_NO_FINISH_HASH |
+				CONTEXT_CONTROL_SIZE(1); // ensure its not 0!
 		}
 		return;
 	}
