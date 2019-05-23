@@ -234,11 +234,13 @@ static int safexcel_handle_req_result(struct safexcel_crypto_priv *priv,
 		if (sreq->hmac &&
 		    (sreq->digest != CONTEXT_CONTROL_DIGEST_HMAC)) {
 			/* Faking HMAC using hash - need to do outer hash */
-			memcpy(sreq->cache, sreq->state, sreq->state_sz);
+			memcpy(sreq->cache, sreq->state, 
+			       crypto_ahash_digestsize(ahash));
 
 			memcpy(sreq->state, ctx->opad, sreq->state_sz);
 
-			sreq->len[0] = sreq->block_sz + sreq->state_sz;
+			sreq->len[0] = sreq->block_sz +
+				       crypto_ahash_digestsize(ahash);
 			sreq->len[1] = 0;
 			sreq->processed[0] = sreq->block_sz;
 			sreq->processed[1] = 0;
