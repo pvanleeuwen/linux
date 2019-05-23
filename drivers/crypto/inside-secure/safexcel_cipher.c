@@ -427,7 +427,7 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 	if (src == dst) {
 		totlen_src = max(totlen_src, totlen_dst);
 		sreq->nr_src = sg_nents_for_len(src, totlen_src);
-		if (unlikely(sreq->nr_src <= 0)) {
+		if (unlikely(totlen_src && (sreq->nr_src <= 0))) {
 			dev_err(priv->dev, "In-place buffer not large enough (need %d bytes)!",
 				totlen_src);
 			return -EINVAL;
@@ -437,7 +437,7 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 		sreq->nr_dst = sreq->nr_src;
 	} else {
 		sreq->nr_src = sg_nents_for_len(src, totlen_src);
-		if (unlikely(sreq->nr_src <= 0)) {
+		if (unlikely(totlen_src && (sreq->nr_src <= 0))) {
 			dev_err(priv->dev, "Source buffer not large enough (need %d bytes)!",
 				totlen_src);
 			return -EINVAL;
@@ -446,7 +446,7 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 					  DMA_TO_DEVICE);
 
 		sreq->nr_dst = sg_nents_for_len(dst, totlen_dst);
-		if (unlikely(sreq->nr_dst <= 0)) {
+		if (unlikely(totlen_dst && (sreq->nr_dst <= 0))) {
 			dev_err(priv->dev, "Dest buffer not large enough (need %d bytes)!",
 				totlen_dst);
 			dma_unmap_sg(priv->dev, src, sreq->nr_src,
@@ -478,6 +478,10 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 				    crypto_skcipher_ivsize(skcipher)));
 	}
 
+	/* The EIP cannot deal with zero length input packets! */
+	if (totlen == 0)
+		totlen = 1;
+
 	/* command descriptors */
 	for_each_sg(src, sg, sreq->nr_src, i) {
 		int len = sg_dma_len(sg);
@@ -499,20 +503,32 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 
 		if (n_cdesc == 1) {
 			first_cdesc = cdesc;
-			safexcel_context_control(ctx, base, sreq, cdesc);
-			if (ctx->aead)
-				safexcel_aead_token(ctx, iv, cdesc,
-						    sreq->direction, cryptlen,
-						    assoclen, digestsize);
-			else
-				safexcel_skcipher_token(ctx, iv, cdesc,
-							cryptlen);
 		}
 
 		queued -= len;
 		if (!queued)
 			break;
 	}
+
+	if (unlikely(!n_cdesc)) {
+		/*
+		 * Special case: zero length input buffer.
+		 * The engine always needs the 1st command descriptor, however!
+		 */
+		first_cdesc = safexcel_add_cdesc(priv, ring, 1, 1, 0, 0, totlen,
+						 ctx->base.ctxr_dma);
+		n_cdesc = 1;
+	}
+
+	/* Add context control words and token to first command descriptor */
+	safexcel_context_control(ctx, base, sreq, first_cdesc);
+	if (ctx->aead)
+		safexcel_aead_token(ctx, iv, first_cdesc,
+				    sreq->direction, cryptlen,
+				    assoclen, digestsize);
+	else
+		safexcel_skcipher_token(ctx, iv, first_cdesc,
+					cryptlen);
 
 	/* result descriptors */
 	for_each_sg(dst, sg, sreq->nr_dst, i) {
@@ -554,7 +570,7 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 		n_rdesc++;
 	}
 
-	if (first) {
+	if (unlikely(first)) {
 		/*
 		 * Special case: AEAD decrypt with only AAD data.
 		 * In this case there is NO output data from the engine,
