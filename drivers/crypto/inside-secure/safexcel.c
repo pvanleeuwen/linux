@@ -1794,23 +1794,26 @@ static int safexcel_request_pci_ring_irq(struct pci_dev *pdev, int irqid,
 				     irq_handler_t threaded_handler,
 				     struct safexcel_ring_irq_data *ring_irq_priv)
 {
-	int ret, irq = pci_irq_vector(pdev, irqid);
+	if (IS_ENABLED(CONFIG_PCI)) {
+		int ret, irq = pci_irq_vector(pdev, irqid);
 
-	if (irq < 0) {
-		dev_err(&pdev->dev, "unable to get device MSI IRQ '%d'",
-			irqid);
+		if (irq < 0) {
+			dev_err(&pdev->dev, "unable to get device MSI IRQ '%d'",
+				irqid);
+			return irq;
+		}
+
+		ret = devm_request_threaded_irq(&pdev->dev, irq, handler,
+						threaded_handler, IRQF_ONESHOT,
+						dev_name(&pdev->dev), 
+						ring_irq_priv);
+		if (ret) {
+			dev_err(&pdev->dev, "unable to request IRQ %d", irq);
+			return ret;
+		}
+
 		return irq;
 	}
-
-	ret = devm_request_threaded_irq(&pdev->dev, irq, handler,
-					threaded_handler, IRQF_ONESHOT,
-					dev_name(&pdev->dev), ring_irq_priv);
-	if (ret) {
-		dev_err(&pdev->dev, "unable to request IRQ %d", irq);
-		return ret;
-	}
-
-	return irq;
 }
 
 static struct safexcel_alg_template *safexcel_algs[] = {
@@ -2534,211 +2537,220 @@ static struct platform_driver  crypto_safexcel = {
 static int crypto_is_pci_probe(struct pci_dev *pdev,
 	 const struct pci_device_id *ent)
 {
-	struct device *dev = &pdev->dev;
-	struct safexcel_crypto_priv *priv;
-	void __iomem *pciebase;
-	int rc, i, msibase;
-	u32 val;
+	if (IS_ENABLED(CONFIG_PCI)) {
+		struct device *dev = &pdev->dev;
+		struct safexcel_crypto_priv *priv;
+		void __iomem *pciebase;
+		int rc, i, msibase;
+		u32 val;
 
-	dev_info(dev, "Probing PCIE device: vendor %04x, device %04x, subv %04x, subdev %04x, ctxt %lx",
-			ent->vendor, ent->device, ent->subvendor,
-			ent->subdevice, ent->driver_data);
+		dev_info(dev, "Probing PCIE device: vendor %04x, device %04x, subv %04x, subdev %04x, ctxt %lx",
+			 ent->vendor, ent->device, ent->subvendor,
+			 ent->subdevice, ent->driver_data);
 
-	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
-	if (!priv) {
-		dev_err(dev, "Failed to allocate memory");
-		return -ENOMEM;
-	}
-
-	priv->dev = dev;
-	priv->ctxt_flags = (enum safexcel_eip_context)ent->driver_data;
-
-	pci_set_drvdata(pdev, priv);
-
-	/* enable the device */
-	rc = pcim_enable_device(pdev);
-	if (rc) {
-		dev_err(dev, "pci_enable_device() failed");
-		return rc;
-	}
-
-	/* take ownership of PCI BAR0 */
-	rc = pcim_iomap_regions(pdev, 1, "crypto_safexcel");
-	if (rc) {
-		dev_err(dev, "pcim_iomap_regions() failed for BAR0");
-		return rc;
-	}
-	priv->base = pcim_iomap_table(pdev)[0];
-
-	/* Assume we have separate MSI vectors for global and rings */
-	msibase = 1;
-
-	if (priv->ctxt_flags & XILINX_PCIE) {
-		dev_info(dev, "Device identified as FPGA based development board - applying HW reset");
-
-		msibase = 0; /* Older devboards map everything to MSI #0 ... */
-		rc = pcim_iomap_regions(pdev, 4, "crypto_safexcel");
-		if (!rc) {
-			pciebase = pcim_iomap_table(pdev)[2];
-			val = readl(pciebase + XILINX_IRQ_BLOCK_ID);
-			if ((val >> 16) == 0x1fc2) {
-				dev_info(dev, "Detected Xilinx PCIE IRQ block version %d, multiple MSI support enabled",
-					 (val & 0xff));
-
-				/* Setup identity map mapping irq #n to MSI#n */
-				writel(0x03020100,
-				       pciebase + XILINX_USER_VECT_LUT0);
-				writel(0x07060504,
-				       pciebase + XILINX_USER_VECT_LUT1);
-				writel(0x0b0a0908,
-				       pciebase + XILINX_USER_VECT_LUT2);
-				writel(0x0f0e0d0c,
-				       pciebase + XILINX_USER_VECT_LUT3);
-
-				/* Enable all device interrupts */
-				writel(GENMASK(31, 0),
-				       pciebase + XILINX_USER_INT_ENB_MASK);
-				/* We have unique MSI vecs for the rings now */
-				msibase = 1;
-			} else {
-				dev_info(dev, "Unrecognised IRQ block identifier %x",
-					 val);
-			}
-		}
-		if (msibase == 0) {
-			/*
-			 * Older dev board. All interrupts mapped to MSI #0
-			 * Therefore, we can only support 1 ring for now!
-			 */
-			dev_info(dev, "Xilinx PCIE IRQ block not detected, using only MSI #0 with 1 ring");
-			max_rings = 1;
+		priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+		if (!priv) {
+			dev_err(dev, "Failed to allocate memory");
+			return -ENOMEM;
 		}
 
-		/* HW reset FPGA dev board */
-		writel(1, priv->base + XILINX_GPIO_BASE); // assert reset
-		wmb(); /* maintain strict ordering for accesses here */
-		writel(0, priv->base + XILINX_GPIO_BASE); // deassert reset
-		wmb(); /* maintain strict ordering for accesses here */
-	}
+		priv->dev = dev;
+		priv->ctxt_flags = (enum safexcel_eip_context)ent->driver_data;
 
-	/* enable bus mastering */
-	pci_set_master(pdev);
+		pci_set_drvdata(pdev, priv);
 
-	/* Generic EIP97/EIP197 device probing */
-	rc = safexcel_probe_generic(priv);
-	if (rc)
-		return rc;
-
-	/*
-	 * Request MSI vectors for global + 1 per ring -
-	 * or just 1 for older dev images
-	 */
-	rc = pci_alloc_irq_vectors(pdev, msibase + priv->config.rings,
-				   msibase + priv->config.rings,
-				   PCI_IRQ_MSI|PCI_IRQ_MSIX);
-	if (rc < 0) {
-		dev_err(dev, "Failed to allocate PCI MSI interrupts");
-		return rc;
-	}
-
-	/* Register the ring IRQ handlers and configure the rings */
-	priv->ring = devm_kcalloc(dev, priv->config.rings,
-				  sizeof(*priv->ring),
-				  GFP_KERNEL);
-	if (!priv->ring) {
-		dev_err(dev, "Failed to allocate ring memory");
-		return -ENOMEM;
-	}
-
-	for (i = 0; i < priv->config.rings; i++) {
-		char wq_name[9] = {0};
-		int irq;
-		struct safexcel_ring_irq_data *ring_irq;
-
-		rc = safexcel_init_ring_descriptors(priv,
-						     &priv->ring[i].cdr,
-						     &priv->ring[i].rdr);
+		/* enable the device */
+		rc = pcim_enable_device(pdev);
 		if (rc) {
-			dev_err(dev, "Failed to initialize rings");
+			dev_err(dev, "pci_enable_device() failed");
 			return rc;
 		}
 
-		priv->ring[i].rdr_req = devm_kcalloc(dev,
-			priv->config.ring_entries,
-			sizeof(priv->ring[i].rdr_req),
-			GFP_KERNEL);
-		if (!priv->ring[i].rdr_req) {
-			dev_err(dev, "Failed to allocate RDR async request queue for ring %d",
-				i);
+		/* take ownership of PCI BAR0 */
+		rc = pcim_iomap_regions(pdev, 1, "crypto_safexcel");
+		if (rc) {
+			dev_err(dev, "pcim_iomap_regions() failed for BAR0");
+			return rc;
+		}
+		priv->base = pcim_iomap_table(pdev)[0];
+
+		/* Assume we have separate MSI vectors for global and rings */
+		msibase = 1;
+
+		if (priv->ctxt_flags & XILINX_PCIE) {
+			dev_info(dev, "Device identified as FPGA based development board - applying HW reset");
+
+			/* Older devboards map everything to MSI #0 ... */
+			msibase = 0;
+			rc = pcim_iomap_regions(pdev, 4, "crypto_safexcel");
+			if (!rc) {
+				pciebase = pcim_iomap_table(pdev)[2];
+				val = readl(pciebase + XILINX_IRQ_BLOCK_ID);
+				if ((val >> 16) == 0x1fc2) {
+					dev_info(dev, "Detected Xilinx PCIE IRQ block version %d, multiple MSI support enabled",
+						 (val & 0xff));
+
+					/* Setup identity map mapping irq #n to MSI#n */
+					writel(0x03020100,
+				       	       pciebase + XILINX_USER_VECT_LUT0);
+					writel(0x07060504,
+					       pciebase + XILINX_USER_VECT_LUT1);
+					writel(0x0b0a0908,
+					       pciebase + XILINX_USER_VECT_LUT2);
+					writel(0x0f0e0d0c,
+					       pciebase + XILINX_USER_VECT_LUT3);
+
+					/* Enable all device interrupts */
+					writel(GENMASK(31, 0),
+					       pciebase + XILINX_USER_INT_ENB_MASK);
+					/* We have unique MSI vecs for the rings now */
+					msibase = 1;
+				} else {
+					dev_info(dev, "Unrecognised IRQ block identifier %x",
+						 val);
+				}
+			}
+			if (msibase == 0) {
+				/*
+			 	* Older dev board. All interrupts mapped to MSI #0
+			 	* Therefore, we can only support 1 ring for now!
+			 	*/
+				dev_info(dev, "Xilinx PCIE IRQ block not detected, using only MSI #0 with 1 ring");
+				max_rings = 1;
+			}
+
+			/* HW reset FPGA dev board */
+			// assert reset
+			writel(1, priv->base + XILINX_GPIO_BASE);
+			wmb(); /* maintain strict ordering for accesses here */
+			// deassert reset
+			writel(0, priv->base + XILINX_GPIO_BASE);
+			wmb(); /* maintain strict ordering for accesses here */
+		}
+
+		/* enable bus mastering */
+		pci_set_master(pdev);
+
+		/* Generic EIP97/EIP197 device probing */
+		rc = safexcel_probe_generic(priv);
+		if (rc)
+			return rc;
+
+		/*
+	 	* Request MSI vectors for global + 1 per ring -
+	 	* or just 1 for older dev images
+	 	*/
+		rc = pci_alloc_irq_vectors(pdev, msibase + priv->config.rings,
+					   msibase + priv->config.rings,
+					   PCI_IRQ_MSI|PCI_IRQ_MSIX);
+		if (rc < 0) {
+			dev_err(dev, "Failed to allocate PCI MSI interrupts");
+			return rc;
+		}
+
+		/* Register the ring IRQ handlers and configure the rings */
+		priv->ring = devm_kcalloc(dev, priv->config.rings,
+					  sizeof(*priv->ring),
+					  GFP_KERNEL);
+		if (!priv->ring) {
+			dev_err(dev, "Failed to allocate ring memory");
 			return -ENOMEM;
 		}
 
-		ring_irq = devm_kzalloc(dev, sizeof(*ring_irq), GFP_KERNEL);
-		if (!ring_irq) {
-			dev_err(dev, "Failed to allocate IRQ data for ring %d",
-				i);
-			return -ENOMEM;
+		for (i = 0; i < priv->config.rings; i++) {
+			char wq_name[9] = {0};
+			int irq;
+			struct safexcel_ring_irq_data *ring_irq;
+
+			rc = safexcel_init_ring_descriptors(priv,
+							     &priv->ring[i].cdr,
+							     &priv->ring[i].rdr);
+			if (rc) {
+				dev_err(dev, "Failed to initialize rings");
+				return rc;
+			}
+
+			priv->ring[i].rdr_req = devm_kcalloc(dev,
+				priv->config.ring_entries,
+				sizeof(priv->ring[i].rdr_req),
+				GFP_KERNEL);
+			if (!priv->ring[i].rdr_req) {
+				dev_err(dev, "Failed to allocate RDR async request queue for ring %d",
+					i);
+				return -ENOMEM;
+			}
+
+			ring_irq = devm_kzalloc(dev, sizeof(*ring_irq), GFP_KERNEL);
+			if (!ring_irq) {
+				dev_err(dev, "Failed to allocate IRQ data for ring %d",
+					i);
+				return -ENOMEM;
+			}
+
+			ring_irq->priv = priv;
+			ring_irq->ring = i;
+
+			irq = safexcel_request_pci_ring_irq(pdev, msibase + i, 
+							    NULL,
+							    safexcel_irq_ring_thread,
+							    ring_irq);
+			if (irq < 0) {
+				dev_err(dev, "Failed to get IRQ ID for ring %d", i);
+				return irq;
+			}
+
+			priv->ring[i].work_data.priv = priv;
+			priv->ring[i].work_data.ring = i;
+			INIT_WORK(&priv->ring[i].work_data.work, 
+				  safexcel_dequeue_work);
+
+			snprintf(wq_name, 9, "wq_ring%d", i);
+			priv->ring[i].workqueue =
+				create_singlethread_workqueue(wq_name);
+			if (!priv->ring[i].workqueue) {
+				dev_err(dev, "Failed to create work queue for ring %d",
+					i);
+				return -ENOMEM;
+			}
+			priv->ring[i].requests = 0;
+			priv->ring[i].busy = false;
+			crypto_init_queue(&priv->ring[i].queue,
+					  priv->config.queue_entries);
+
+			spin_lock_init(&priv->ring[i].lock);
+			spin_lock_init(&priv->ring[i].queue_lock);
 		}
 
-		ring_irq->priv = priv;
-		ring_irq->ring = i;
+		atomic_set(&priv->ring_used, 0);
 
-		irq = safexcel_request_pci_ring_irq(pdev, msibase + i, NULL,
-						    safexcel_irq_ring_thread,
-						    ring_irq);
-		if (irq < 0) {
-			dev_err(dev, "Failed to get IRQ ID for ring %d", i);
-			return irq;
+		rc = safexcel_hw_init(priv);
+		if (rc) {
+			dev_err(dev, "EIP(1)97 h/w init failed (%d)", rc);
+			return rc;
 		}
 
-		priv->ring[i].work_data.priv = priv;
-		priv->ring[i].work_data.ring = i;
-		INIT_WORK(&priv->ring[i].work_data.work, safexcel_dequeue_work);
-
-		snprintf(wq_name, 9, "wq_ring%d", i);
-		priv->ring[i].workqueue = create_singlethread_workqueue(wq_name);
-		if (!priv->ring[i].workqueue) {
-			dev_err(dev, "Failed to create work queue for ring %d",
-				i);
-			return -ENOMEM;
+		rc = safexcel_register_algorithms(priv);
+		if (rc) {
+			dev_err(dev, "Failed to register algorithms (%d)", rc);
+			return rc;
 		}
-		priv->ring[i].requests = 0;
-		priv->ring[i].busy = false;
-		crypto_init_queue(&priv->ring[i].queue,
-				  priv->config.queue_entries);
-
-		spin_lock_init(&priv->ring[i].lock);
-		spin_lock_init(&priv->ring[i].queue_lock);
 	}
-
-	atomic_set(&priv->ring_used, 0);
-
-	rc = safexcel_hw_init(priv);
-	if (rc) {
-		dev_err(dev, "EIP(1)97 h/w init failed (%d)", rc);
-		return rc;
-	}
-
-	rc = safexcel_register_algorithms(priv);
-	if (rc) {
-		dev_err(dev, "Failed to register algorithms (%d)", rc);
-		return rc;
-	}
-
 	return 0;
 }
 
 void crypto_is_pci_remove(struct pci_dev *pdev)
 {
-	struct safexcel_crypto_priv *priv = pci_get_drvdata(pdev);
-	int i;
+	if (IS_ENABLED(CONFIG_PCI)) {
+		struct safexcel_crypto_priv *priv = pci_get_drvdata(pdev);
+		int i;
 
-	safexcel_unregister_algorithms(priv);
+		safexcel_unregister_algorithms(priv);
 
-	for (i = 0; i < priv->config.rings; i++)
-		destroy_workqueue(priv->ring[i].workqueue);
+		for (i = 0; i < priv->config.rings; i++)
+			destroy_workqueue(priv->ring[i].workqueue);
 
-	safexcel_hw_reset_rings(priv);
+		safexcel_hw_reset_rings(priv);
+	}
 }
 
 static const struct pci_device_id crypto_is_pci_ids[] = {
@@ -2769,8 +2781,11 @@ static int __init crypto_is_init(void)
 	/* Register platform driver */
 	platform_driver_register(&crypto_safexcel);
 
-	/* Register PCI driver */
-	rc = pci_register_driver(&crypto_is_pci_driver);
+	if (IS_ENABLED(CONFIG_PCI)) {
+		/* Register PCI driver */
+		rc = pci_register_driver(&crypto_is_pci_driver);
+	}
+	
 	return 0;
 }
 
@@ -2779,8 +2794,10 @@ static void __exit crypto_is_exit(void)
 	/* Unregister platform driver */
 	platform_driver_unregister(&crypto_safexcel);
 
-	/* Unregister PCI driver if successfully registered before */
-	pci_unregister_driver(&crypto_is_pci_driver);
+	if (IS_ENABLED(CONFIG_PCI)) {
+		/* Unregister PCI driver if successfully registered before */
+		pci_unregister_driver(&crypto_is_pci_driver);
+	}	
 }
 
 module_init(crypto_is_init);
