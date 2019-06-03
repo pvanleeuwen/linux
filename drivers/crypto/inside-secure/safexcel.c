@@ -2054,7 +2054,7 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 {
 
 	u32 version, val, mask, peid;
-	u32 hwopt, hiaopt;
+	u32 hwopt, hiaopt, peopt;
 
 	/* Determine engine type & endianness and configure byte swap */
 
@@ -2148,24 +2148,34 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 	}
 	priv->pever = (version>>16)&0xfff;
 
+	/* Extract HW configuration options */
+	hwopt = readl(EIP197_GLOBAL(priv) + EIP197_OPTIONS);
+	hiaopt = readl(EIP197_HIA_AIC(priv) + EIP197_HIA_OPTIONS);
+	
+	priv->algo_flags = readl(EIP197_PE(priv) + EIP197_PE_EIP96_OPTIONS(0));
+	priv->hwnumrings = hiaopt & 0xf;
+
 	/* EIP197 only */
 	if (priv->feat_flags & HW_IS_EIP197) {
+		/* EIP206 processing pipe */
+		version = readl(EIP197_PE(priv) + + EIP197_PE_VERSION(0));
+		if ((version & 0xffff) != EIP206_VERSION_LE) {
+			dev_err(priv->dev, "Probing for EIP206 subsystem failed");
+			return -ENODEV;
+		}
+		priv->ppver = (version>>16)&0xfff;		
+
+		/* EIP207 classification support subsystem */
 		version = readl(priv->base + EIP197_CS_VERSION);
 		if ((version & 0xffff) != EIP207_VERSION_LE) {
 			dev_err(priv->dev, "Probing for EIP207 subsystem failed");
 			return -ENODEV;
 		}
 		priv->csver = (version>>16)&0xfff;
-	}
 
-	/* Extract HW configuration options */
-	hwopt = readl(EIP197_GLOBAL(priv) + EIP197_OPTIONS);
-	hiaopt = readl(EIP197_HIA_AIC(priv) + EIP197_HIA_OPTIONS);
+		/* extract processing pipeline options */
+		peopt = readl(EIP197_PE(priv) + EIP197_PE_OPTIONS(0));
 
-	priv->algo_flags = readl(EIP197_PE(priv) + EIP197_PE_EIP96_OPTIONS(0));
-	priv->hwnumrings = hiaopt & 0xf;
-
-	if (priv->feat_flags & HW_IS_EIP197) {
 		priv->hwnumpes = (hiaopt>>4)&0x1f;
 		/* Note: 0 means 32 ... */
 		priv->hwnumpes = priv->hwnumpes+((priv->hwnumpes == 0)<<5);
@@ -2175,18 +2185,26 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 
 		if (hiaopt&EIP197_HIA_OPT_HAS_PE_ARB)
 			priv->feat_flags |= EIP197_PE_ARB;
-		if (hwopt&EIP197_OPT_HAS_ICE)
+		// take ICE presence from EIP206 options for HW < 2.8
+		if (EIP206_OPT_ICE_TYPE(peopt) == 1)
 			priv->feat_flags |= EIP197_ICE;
-		if (hwopt&EIP197_OPT_HAS_OCE)
+		// take OCE presence from EIP206 options for HW < 2.8
+		if (EIP206_OPT_OCE_TYPE(peopt) == 1)
 			priv->feat_flags |= EIP197_OCE;
-		if (hwopt&EIP197_OPT_HAS_HWTB)
-			priv->feat_flags |= EIP197_HWTB;
-		if (hwopt&EIP197_OPT_HAS_VIRT)
-			priv->feat_flags |= EIP197_VIRT;
-		if (hwopt&EIP197_OPT_HAS_DRBG)
-			priv->feat_flags |= EIP197_DRBG;
-		if (hwopt&EIP197_OPT_HAS_FRC)
-			priv->feat_flags |= EIP197_FRC_CACHE;
+		// these option bits are reserved for older HW!
+		if (priv->hwver >= 0x280) {
+			if (hwopt&EIP197_OPT_HAS_HWTB)
+				priv->feat_flags |= EIP197_HWTB;
+			if (hwopt&EIP197_OPT_HAS_VIRT)
+				priv->feat_flags |= EIP197_VIRT;
+			if (hwopt&EIP197_OPT_HAS_DRBG)
+				priv->feat_flags |= EIP197_DRBG;
+			if (hwopt&EIP197_OPT_HAS_FRC)
+				priv->feat_flags |= EIP197_FRC_CACHE;
+		} else {
+			// defaults for HW older than 2.8
+			priv->feat_flags |= EIP197_VIRT | EIP197_FRC_CACHE;
+		}
 		if (hwopt&EIP197_OPT_HAS_TRC) {
 			priv->feat_flags |= EIP197_TRC_CACHE;
 			/* cache really needs to be invalidated ...*/
@@ -2214,9 +2232,10 @@ static int safexcel_probe_generic(struct safexcel_crypto_priv *priv)
 	dev_info(priv->dev, "Successfully detected Inside Secure EIP%d packetengine HW%d.%d.%d(%d)",
 		peid, (priv->hwver>>8), ((priv->hwver>>4)&0xf),
 		(priv->hwver&0xf), priv->hwctg);
-	dev_info(priv->dev, " EIP96 HW%d.%d.%d, EIP202 HW%d.%d.%d, EIP207 HW%d.%d.%d",
+	dev_info(priv->dev, " EIP96 HW%d.%d.%d, EIP202 HW%d.%d.%d, EIP206 HW%d.%d.%d, EIP207 HW%d.%d.%d",
 		(priv->pever>>8),  ((priv->pever>>4)&0xf),  (priv->pever&0xf),
 		(priv->hiaver>>8), ((priv->hiaver>>4)&0xf), (priv->hiaver&0xf),
+		(priv->ppver>>8),  ((priv->ppver>>4)&0xf),  (priv->ppver&0xf),
 		(priv->csver>>8),  ((priv->csver>>4)&0xf),  (priv->csver&0xf));
 	dev_info(priv->dev, " HW has %d processing pipes, %d rings and %d ring AICs, dwidth %d bits, cfsize %d words, rfsize %d words",
 		priv->hwnumpes, priv->hwnumrings, priv->hwnumraic,

@@ -20,12 +20,17 @@
 #define EIP197_VERSION_LE			0x3ac5
 #define EIP96_VERSION_LE			0x9f60
 #define EIP201_VERSION_LE			0x36c9
+#define EIP206_VERSION_LE			0x31ce
 #define EIP207_VERSION_LE			0x30cf
 
 #define EIP197_MAX_RING_AIC			14
 
 /* EIP197 HIA OPTIONS ENCODING */
 #define EIP197_HIA_OPT_HAS_PE_ARB		BIT(29)
+
+/* EIP206 OPTIONS ENCODING */
+#define EIP206_OPT_OCE_TYPE(n)			((n>>10)&3)
+#define EIP206_OPT_ICE_TYPE(n)			((n>>8)&3)
 
 /* EIP197 OPTIONS ENCODING */
 #define EIP197_OPT_HAS_OCE			BIT(24)
@@ -200,6 +205,8 @@
 #define EIP197_PE_OUT_DBUF_THRES(n)		(0x1c00 + (0x2000 * (n)))
 #define EIP197_PE_OUT_TBUF_THRES(n)		(0x1d00 + (0x2000 * (n)))
 #define EIP197_PE_DEBUG(n)			(0x1ff4 + (0x2000 * (n)))
+#define EIP197_PE_OPTIONS(n)			(0x1ff8 + (0x2000 * (n)))
+#define EIP197_PE_VERSION(n)			(0x1ffc + (0x2000 * (n)))
 #define EIP197_MST_CTRL				0xfff4
 #define EIP197_OPTIONS				0xfff8
 #define EIP197_VERSION				0xfffc
@@ -836,6 +843,7 @@ struct safexcel_crypto_priv {
 	int fwctg;
 	int pever;
 	int hiaver;
+	int ppver;
 	int csver;
 	enum safexcel_flags feat_flags;
 	enum safexcel_eip_algorithms algo_flags;
