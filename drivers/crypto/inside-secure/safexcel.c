@@ -1794,26 +1794,24 @@ static int safexcel_request_pci_ring_irq(struct pci_dev *pdev, int irqid,
 				     irq_handler_t threaded_handler,
 				     struct safexcel_ring_irq_data *ring_irq_priv)
 {
-	if (IS_ENABLED(CONFIG_PCI)) {
-		int ret, irq = pci_irq_vector(pdev, irqid);
+	int ret, irq = pci_irq_vector(pdev, irqid);
 
-		if (irq < 0) {
-			dev_err(&pdev->dev, "unable to get device MSI IRQ '%d'",
-				irqid);
-			return irq;
-		}
-
-		ret = devm_request_threaded_irq(&pdev->dev, irq, handler,
-						threaded_handler, IRQF_ONESHOT,
-						dev_name(&pdev->dev), 
-						ring_irq_priv);
-		if (ret) {
-			dev_err(&pdev->dev, "unable to request IRQ %d", irq);
-			return ret;
-		}
-
+	if (irq < 0) {
+		dev_err(&pdev->dev, "unable to get device MSI IRQ '%d'",
+			irqid);
 		return irq;
 	}
+
+	ret = devm_request_threaded_irq(&pdev->dev, irq, handler,
+					threaded_handler, IRQF_ONESHOT,
+					dev_name(&pdev->dev), 
+					ring_irq_priv);
+	if (ret) {
+		dev_err(&pdev->dev, "unable to request IRQ %d", irq);
+		return ret;
+	}
+
+	return irq;
 }
 
 static struct safexcel_alg_template *safexcel_algs[] = {
