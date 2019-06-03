@@ -53,7 +53,6 @@ struct safexcel_cipher_req {
 	enum safexcel_cipher_direction direction;
 	bool needs_inv;
 	int  nr_src, nr_dst;
-	u8   input_iv[AES_BLOCK_SIZE];
 };
 
 static void safexcel_skcipher_token(struct safexcel_cipher_ctx *ctx, u8 *iv,
@@ -365,18 +364,13 @@ static int safexcel_handle_req_result(struct safexcel_crypto_priv *priv, int rin
 	/*
 	 * Update IV in req from last crypto output word for CBC modes
 	 */
-	if ((!ctx->aead) && (ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC)) {
-		if (sreq->direction == SAFEXCEL_ENCRYPT) {
-			/* For encrypt take the last output word */
-			sg_pcopy_to_buffer(dst, sreq->nr_dst, areq->iv,
-					   crypto_skcipher_ivsize(skcipher),
-					   (cryptlen -
-					    crypto_skcipher_ivsize(skcipher)));
-		} else {
-			/* For decrypt we previously saved the IV */
-			memcpy(areq->iv, sreq->input_iv,
-			       crypto_skcipher_ivsize(skcipher));
-		}
+	if ((!ctx->aead) && (ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC) &&
+	    (sreq->direction == SAFEXCEL_ENCRYPT)) {
+		/* For encrypt take the last output word */
+		sg_pcopy_to_buffer(dst, sreq->nr_dst, areq->iv,
+				   crypto_skcipher_ivsize(skcipher),
+				   (cryptlen -
+				    crypto_skcipher_ivsize(skcipher)));
 	}
 
 	*should_complete = true;
@@ -406,6 +400,7 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 	int queued, i, ret = 0;
 	bool first = true;
 
+	memcpy(ctx->base.ctxr->data, ctx->key, ctx->key_len);
 	if (ctx->aead) {
 		/*
 		 * AEAD has auth tag appended to output for encrypt and
@@ -415,6 +410,23 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 			totlen_dst -= digestsize;
 		else
 			totlen_dst += digestsize;
+
+		memcpy(ctx->base.ctxr->data + ctx->key_len / sizeof(u32),
+		       ctx->ipad, ctx->state_sz);
+		memcpy(ctx->base.ctxr->data + (ctx->key_len + ctx->state_sz) /
+		       sizeof(u32),
+		       ctx->opad, ctx->state_sz);
+	} else if ((ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC)  &&
+		   (sreq->direction == SAFEXCEL_DECRYPT)) {
+		/*
+		 * Save IV from last crypto input word for CBC modes in decrypt
+		 * direction. Need to do this first in case of inplace operation
+		 * as it will be overwritten.
+		 */
+		sg_pcopy_to_buffer(src, sreq->nr_src, areq->iv,
+				   crypto_skcipher_ivsize(skcipher),
+				   (totlen_src -
+				    crypto_skcipher_ivsize(skcipher)));
 	}
 
 	/*
@@ -456,26 +468,6 @@ static int safexcel_send_req(struct crypto_async_request *base, int ring,
 
 		sreq->nr_dst = dma_map_sg(priv->dev, dst, sreq->nr_dst,
 					  DMA_FROM_DEVICE);
-	}
-
-	memcpy(ctx->base.ctxr->data, ctx->key, ctx->key_len);
-	if (ctx->aead) {
-		memcpy(ctx->base.ctxr->data + ctx->key_len / sizeof(u32),
-		       ctx->ipad, ctx->state_sz);
-		memcpy(ctx->base.ctxr->data + (ctx->key_len + ctx->state_sz) /
-		       sizeof(u32),
-		       ctx->opad, ctx->state_sz);
-	} else if ((ctx->mode == CONTEXT_CONTROL_CRYPTO_MODE_CBC)  &&
-		   (sreq->direction == SAFEXCEL_DECRYPT)) {
-		/*
-		 * Save IV from last crypto input word for CBC modes in decrypt
-		 * direction. Need to do this first in case of inplace operation
-		 * as it will be overwritten.
-		 */
-		sg_pcopy_to_buffer(src, sreq->nr_src, sreq->input_iv,
-				   crypto_skcipher_ivsize(skcipher),
-				   (totlen_src -
-				    crypto_skcipher_ivsize(skcipher)));
 	}
 
 	/* The EIP cannot deal with zero length input packets! */
@@ -729,12 +721,22 @@ static int safexcel_skcipher_send(struct crypto_async_request *async, int ring,
 	struct safexcel_cipher_req *sreq = skcipher_request_ctx(req);
 	int ret;
 
-	if (sreq->needs_inv)
+	if (sreq->needs_inv) {
 		ret = safexcel_cipher_send_inv(async, ring, commands, results);
-	else
+	} else {
+		struct crypto_skcipher *skcipher = crypto_skcipher_reqtfm(req);
+		u8 input_iv[AES_BLOCK_SIZE];
+
+		/*
+		 * Save input IV in case of CBC decrypt mode
+		 * Will be overwritten with output IV prior to use!
+		 */
+		memcpy(input_iv, req->iv, crypto_skcipher_ivsize(skcipher));
+
 		ret = safexcel_send_req(async, ring, sreq, req->src,
-					req->dst, req->cryptlen, 0, 0, req->iv,
+					req->dst, req->cryptlen, 0, 0, input_iv,
 					commands, results);
+	}
 	return ret;
 }
 
