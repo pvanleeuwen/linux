@@ -56,7 +56,7 @@ MODULE_PARM_DESC(burst_size, "2log of AXI burst size to use (1-8, 4 is default)"
 static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 {
 	u32 val, htable_offset;
-	int i, cs_rc_max, cs_ht_wc, cs_ht_sz;
+	int i, cs_rc_max, cs_rc_abs_max, cs_ht_wc, cs_ht_sz;
 	int maxbanks, actbank, curbank, lrgrecsz;
 	u32 addrhi, addrlo, addrmid, dsize, asize;
 
@@ -223,12 +223,15 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 	 * Step #1: How many records will physically fit?
 	 * Hard upper limit is 1023!
 	 */
-	cs_rc_max = min_t(uint, ((dsize>>2) / lrgrecsz), 1023);
+	cs_rc_abs_max = min_t(uint, ((dsize>>2) / lrgrecsz), 1023);
 	/* Step #2: Need at least 2 words in the admin RAM per record */
-	cs_rc_max = min_t(uint, cs_rc_max, (asize>>1));
+	cs_rc_max = min_t(uint, cs_rc_abs_max, (asize>>1));
 	/* Step #3: Determine log2 of hash table size */
 	cs_ht_sz = __fls(asize - cs_rc_max) - 2;
+	/* Step #4: determine current size of hash table in admin words */
 	cs_ht_wc = 16<<cs_ht_sz; // dwords, not admin words
+	/* Step #5: add back excess words and see if we can fit more records */
+	cs_rc_max = min_t(uint, cs_rc_abs_max, asize - (cs_ht_wc>>4));
 
 	dev_info(priv->dev,
 		"Initializing cache for %d records with %d hash table entries (%d/record)",
