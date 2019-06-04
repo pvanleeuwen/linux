@@ -228,7 +228,7 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 	cs_rc_max = min_t(uint, cs_rc_abs_max, (asize>>1));
 	/* Step #3: Determine log2 of hash table size */
 	cs_ht_sz = __fls(asize - cs_rc_max) - 2;
-	/* Step #4: determine current size of hash table in admin words */
+	/* Step #4: determine current size of hash table in dwords */
 	cs_ht_wc = 16<<cs_ht_sz; // dwords, not admin words
 	/* Step #5: add back excess words and see if we can fit more records */
 	cs_rc_max = min_t(uint, cs_rc_abs_max, asize - (cs_ht_wc>>4));
