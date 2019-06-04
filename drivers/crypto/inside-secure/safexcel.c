@@ -283,7 +283,7 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 static void eip197_init_firmware(struct safexcel_crypto_priv *priv,
 				 int numfw)
 {
-	int pe;
+	int pe, i;
 	u32 val;
 
 	for (pe = 0; pe < priv->config.pes; pe++) {
@@ -299,9 +299,11 @@ static void eip197_init_firmware(struct safexcel_crypto_priv *priv,
 		       EIP197_PE_ICE_SCRATCH_CTRL_CHANGE_ACCESS;
 		writel(val, EIP197_PE(priv) + EIP197_PE_ICE_SCRATCH_CTRL(pe));
 
-		memset_io(EIP197_PE(priv) + EIP197_PE_ICE_SCRATCH_RAM(pe), 0,
-			  EIP197_NUM_OF_SCRATCH_BLOCKS * sizeof(u32));
-
+		/* clear the scratchpad RAM using 32 bit writes only */
+		for (i=0; i < EIP197_NUM_OF_SCRATCH_BLOCKS; i++)
+			writel(0, EIP197_PE(priv) + 
+				  EIP197_PE_ICE_SCRATCH_RAM(pe) + (i<<2));
+		
 		/* Reset the IFPP engine to make its program mem accessible */
 		writel(EIP197_PE_ICE_x_CTRL_SW_RESET |
 		       EIP197_PE_ICE_x_CTRL_CLR_ECC_CORR |
@@ -322,14 +324,14 @@ static void eip197_init_firmware(struct safexcel_crypto_priv *priv,
 			       EIP197_PE_ICE_SCRATCH_CTRL_TIMER_EN |
 			       EIP197_PE_ICE_SCRATCH_CTRL_SCRATCH_ACCESS |
 			       EIP197_PE_ICE_SCRATCH_CTRL_CHANGE_ACCESS;
-			writel(val,
-			       EIP197_PE(priv) +
-			       EIP197_PE_OCE_SCRATCH_CTRL(pe));
+			writel(val, EIP197_PE(priv) +
+				    EIP197_PE_OCE_SCRATCH_CTRL(pe));
 
-			memset_io(EIP197_PE(priv) +
-				  EIP197_PE_OCE_SCRATCH_RAM(pe), 0,
-				  EIP197_NUM_OF_SCRATCH_BLOCKS * sizeof(u32));
-
+			/* clear the scratchpad RAM using 32 bit writes only */
+			for (i=0; i < EIP197_NUM_OF_SCRATCH_BLOCKS; i++)
+				writel(0, EIP197_PE(priv) + 
+					  EIP197_PE_OCE_SCRATCH_RAM(pe) + (i<<2));
+			
 			/* Reset the OFPP to make its program mem accessible */
 			writel(EIP197_PE_ICE_x_CTRL_SW_RESET |
 			       EIP197_PE_ICE_x_CTRL_CLR_ECC_CORR |
