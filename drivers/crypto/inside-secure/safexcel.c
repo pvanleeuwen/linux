@@ -205,6 +205,9 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 	}
 	asize = addrhi>>4; // probed admin RAM size in admin words
 
+	/* Clear any ECC errors detected while probing! */
+	writel(0, priv->base + EIP197_TRC_ECCCTRL);
+
 	dev_info(priv->dev,
 		"Probed %d words of transform record cache admin RAM", asize);
 
@@ -251,7 +254,10 @@ static void eip197_trc_cache_init(struct safexcel_crypto_priv *priv)
 			val |= EIP197_CS_RC_PREV(EIP197_RC_NULL);
 		else if (i == cs_rc_max - 1)
 			val |= EIP197_CS_RC_NEXT(EIP197_RC_NULL);
-		writel(val, priv->base + offset + sizeof(u32));
+		writel(val, priv->base + offset + 4);
+		/* must also initialize the address key due to ECC! */
+		writel(0, priv->base + offset + 8);
+		writel(0, priv->base + offset + 12);
 	}
 
 	/* Clear the hash table entries */
